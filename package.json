@@ -1,0 +1,27 @@
+{
+  "name": "f1-telemetry-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "F1 Telemetry & Analytics Dashboard — Monaco GP (mock data layer, API-ready)",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "lucide-react": "^0.454.0",
+    "next": "^16.2.11",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "recharts": "^2.13.0"
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.47",
+    "tailwindcss": "^3.4.14",
+    "typescript": "^5.6.3",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19"
+  }
+}
