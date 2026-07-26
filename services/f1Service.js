@@ -625,37 +625,140 @@ export async function getDemographics() {
 
 /**
  * Clean a raw GPS trace into a drawable racing line.
- * OpenF1 location data can contain teleports: duplicate timestamps,
- * momentary dropouts, or samples that slip in from another lap/driver.
- * Connecting those in time order draws long chords straight across the
- * circuit — the "map crosses itself" symptom. We drop any sample that
- * jumps more than a few multiples of the median step from the last good
- * point, which removes the chords while keeping the true racing line.
+ * ------------------------------------------------------------------
+ * Measured against real OpenF1 data (Hungary 2026, driver #81 lap 7):
+ * 318 samples at a correct 3.7 Hz, single driver, correct time window —
+ * but a max step of 3674 units (≈367 m in 0.27 s, impossible) and a
+ * start/end 67% of the circuit diagonal apart. So the stream contains
+ * isolated spikes, and lap metadata cannot be trusted to bound a lap.
+ *
+ * spike filter: a point is dropped only if it is far from BOTH of its
+ * neighbours — an isolated jump. Anchoring to the previous *kept* point
+ * (the old approach) fails when the very first sample is itself bad.
  */
-function cleanTracePoints(pts) {
+function despikeTrace(pts, factor = 6) {
   if (pts.length < 20) return pts;
+  const step = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
   const steps = [];
-  for (let i = 1; i < pts.length; i++) {
-    steps.push(Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
-  }
+  for (let i = 1; i < pts.length; i++) steps.push(step(pts[i], pts[i - 1]));
   const sorted = [...steps].sort((a, b) => a - b);
   const median = sorted[Math.floor(sorted.length / 2)] || 1;
-  const limit = median * 6;
-  const out = [pts[0]];
-  for (let i = 1; i < pts.length; i++) {
-    const prev = out[out.length - 1];
-    if (Math.hypot(pts[i][0] - prev[0], pts[i][1] - prev[1]) <= limit) out.push(pts[i]);
+  const limit = median * factor;
+
+  const out = [];
+  for (let i = 0; i < pts.length; i++) {
+    const prev = pts[i - 1], next = pts[i + 1];
+    const farPrev = prev ? step(pts[i], prev) > limit : false;
+    const farNext = next ? step(pts[i], next) > limit : false;
+    /* Isolated spike = detached from both sides. Endpoints need only one
+       detached side to be considered bad. */
+    const isolated = prev && next ? farPrev && farNext : farPrev || farNext;
+    if (!isolated) out.push(pts[i]);
   }
-  return out;
+  return out.length >= 20 ? out : pts;
 }
 
-/** A valid lap trace must return roughly to where it started. */
-function traceClosesLoop(pts, tolerance = 0.25) {
-  if (pts.length < 20) return false;
-  const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+/**
+ * Close the lap empirically: walk forward from the first point and find
+ * where the car comes back nearest to it. Works regardless of whether
+ * lap date_start / lap_duration line up with the start-finish line.
+ * Returns the truncated closed loop, or null if it never returns.
+ */
+function closeLoop(pts, minFraction = 0.6) {
+  if (pts.length < 40) return null;
+  const start = pts[0];
+  const from = Math.floor(pts.length * minFraction);
+  let bestIdx = -1, bestDist = Infinity;
+  for (let i = from; i < pts.length; i++) {
+    const d = Math.hypot(pts[i][0] - start[0], pts[i][1] - start[1]);
+    if (d < bestDist) { bestDist = d; bestIdx = i; }
+  }
+  if (bestIdx < 0) return null;
+  const loop = pts.slice(0, bestIdx + 1);
+  const xs = loop.map((p) => p[0]), ys = loop.map((p) => p[1]);
   const diag = Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
-  const gap = Math.hypot(pts[0][0] - pts[pts.length - 1][0], pts[0][1] - pts[pts.length - 1][1]);
-  return diag > 0 && gap / diag <= tolerance;
+  /* Accept only if it genuinely returns near the start. */
+  return diag > 0 && bestDist / diag <= 0.12 ? loop : null;
+}
+
+
+/**
+ * Try several candidate laps until one yields a valid closed circuit.
+ * Real data (Hungary 2026): driver #81 lap 7 has a GPS gap and closes at
+ * only 26.2% — unusable — while driver #44 lap 15 closes at 3.0%. A
+ * single-lap approach therefore fails intermittently by luck of the draw.
+ * Candidates are de-duplicated per driver so one car's bad GPS unit can't
+ * consume every attempt.
+ */
+function pickLapCandidates(laps, maxCandidates = 6) {
+  const clean = (Array.isArray(laps) ? laps : []).filter(
+    (l) =>
+      l.date_start && l.lap_duration > 0 && !l.is_pit_out_lap &&
+      l.duration_sector_1 && l.duration_sector_2 && l.duration_sector_3
+  );
+  clean.sort((a, b) => a.lap_duration - b.lap_duration);
+  const seen = new Set();
+  const picks = [];
+  for (const l of clean) {
+    if (seen.has(l.driver_number)) continue;   // one lap per driver first
+    seen.add(l.driver_number);
+    picks.push(l);
+    if (picks.length >= maxCandidates) break;
+  }
+  /* Top up with any remaining laps if the field was small. */
+  for (const l of clean) {
+    if (picks.length >= maxCandidates) break;
+    if (!picks.includes(l)) picks.push(l);
+  }
+  return picks;
+}
+
+/** Fetch + clean + close one candidate lap. Returns null if unusable. */
+async function traceOneLap(sessionKey, lap, ttl) {
+  const t0 = new Date(lap.date_start).getTime();
+  const windowMs = lap.lap_duration * 1000 * 1.4; // over-fetch; we self-close
+  const iso = (ms) => encodeURIComponent(new Date(ms).toISOString());
+  const raw = await fetchJson(
+    `${OPENF1_BASE}/location?session_key=${sessionKey}` +
+      `&driver_number=${lap.driver_number}&date>${iso(t0)}&date<${iso(t0 + windowMs)}`,
+    { ttl, timeout: 30_000 }
+  );
+  if (!Array.isArray(raw) || raw.length < 60) return null;
+
+  const samples = raw
+    .filter((p) => p.x != null && p.y != null && !(p.x === 0 && p.y === 0))
+    .filter((p) => p.driver_number == null || p.driver_number === lap.driver_number)
+    .map((p) => ({ t: new Date(p.date).getTime(), x: p.x, y: p.y }))
+    .sort((a, b) => a.t - b.t);
+  if (samples.length < 60) return null;
+
+  const despiked = despikeTrace(samples.map((s) => [s.x, s.y]));
+  const loop = closeLoop(despiked);
+  if (!loop) return null;
+
+  /* Continuity check. Despiking removes isolated bad samples, but a genuine
+     dropout leaves two *valid* points with a hole between them — drawn as a
+     straight line that cuts across the circuit. Score the worst gap so the
+     caller can prefer a lap with unbroken data. */
+  const steps = [];
+  for (let i = 1; i < loop.length; i++) {
+    steps.push(Math.hypot(loop[i][0] - loop[i - 1][0], loop[i][1] - loop[i - 1][1]));
+  }
+  const sortedSteps = [...steps].sort((a, b) => a - b);
+  const medianStep = sortedSteps[Math.floor(sortedSteps.length / 2)] || 1;
+  const gapRatio = Math.max(...steps) / medianStep;
+
+  /* Re-attach timestamps for the accepted loop (needed for sector split). */
+  const wanted = new Map();
+  loop.forEach(([x, y]) => wanted.set(`${x}|${y}`, (wanted.get(`${x}|${y}`) ?? 0) + 1));
+  const loopSamples = [];
+  for (const s of samples) {
+    const k = `${s.x}|${s.y}`;
+    const n = wanted.get(k);
+    if (n) { loopSamples.push(s); wanted.set(k, n - 1); }
+    if (loopSamples.length >= loop.length) break;
+  }
+  return { points: loop, samples: loopSamples, lap, gapRatio, medianStep };
 }
 
 /**
@@ -671,51 +774,35 @@ export async function getTrackOutline() {
       const race = await jolpicaLatestRaceResults();
       const { sessionKey } = await resolveOpenF1Session(race);
 
-      /* Pick a clean reference lap from a mid-race window: all sectors
-         timed, not a pit-out lap. Window > single lap = far more robust. */
+      /* Try several candidate laps: some laps contain GPS gaps and never
+         close a loop (measured: one lap closed at 26%, another at 3%).
+         The first candidate that yields a valid circuit wins. */
       const laps = await fetchJson(
-        `${OPENF1_BASE}/laps?session_key=${sessionKey}&lap_number>=8&lap_number<=14`,
+        `${OPENF1_BASE}/laps?session_key=${sessionKey}&lap_number>=6&lap_number<=16`,
         { ttl: TTL.sessions, timeout: 20_000 }
       );
-      const lap = (Array.isArray(laps) ? laps : []).find(
-        (l) =>
-          l.date_start &&
-          l.duration_sector_1 &&
-          l.duration_sector_2 &&
-          l.duration_sector_3 &&
-          !l.is_pit_out_lap
-      );
-      if (!lap) throw new Error(`no clean reference lap (got ${Array.isArray(laps) ? laps.length : 0} rows)`);
+      const candidates = pickLapCandidates(laps);
+      if (!candidates.length)
+        throw new Error(`no clean reference lap (got ${Array.isArray(laps) ? laps.length : 0} rows)`);
 
+      let traced = null, bestBroken = null;
+      for (const candidate of candidates) {
+        try {
+          const attempt = await traceOneLap(sessionKey, candidate, TTL.sessions);
+          if (!attempt) continue;
+          if (attempt.gapRatio <= 8) { traced = attempt; break; }   // continuous data
+          if (!bestBroken || attempt.gapRatio < bestBroken.gapRatio) bestBroken = attempt;
+        } catch {
+          /* next candidate */
+        }
+      }
+      if (!traced) traced = bestBroken;
+      if (!traced)
+        throw new Error(`no candidate lap produced a closed circuit (tried ${candidates.length})`);
+
+      const lap = traced.lap;
       const t0 = new Date(lap.date_start).getTime();
-      const totalMs =
-        (lap.lap_duration ??
-          lap.duration_sector_1 + lap.duration_sector_2 + lap.duration_sector_3) * 1000;
-      const iso = (ms) => new Date(ms).toISOString();
-
-      /* ~3.7 Hz positional samples across exactly one lap (~280 points). */
-      const raw = await fetchJson(
-        `${OPENF1_BASE}/location?session_key=${sessionKey}` +
-          `&driver_number=${lap.driver_number}` +
-          `&date>${encodeURIComponent(iso(t0))}&date<${encodeURIComponent(iso(t0 + totalMs))}`,
-        { ttl: TTL.sessions, timeout: 30_000 }
-      );
-      if (!Array.isArray(raw) || raw.length < 50)
-        throw new Error(`insufficient location samples (got ${Array.isArray(raw) ? raw.length : "non-array"})`);
-
-      /* Keep only this driver's samples inside the lap window, drop
-         null/zero fixes, then strip teleports before drawing. */
-      const cleaned = raw
-        .filter((p) => p.x != null && p.y != null && !(p.x === 0 && p.y === 0))
-        .filter((p) => p.driver_number == null || p.driver_number === lap.driver_number)
-        .map((p) => ({ ...p, _t: new Date(p.date).getTime() }))
-        .filter((p) => p._t >= t0 && p._t <= t0 + totalMs)
-        .sort((a, b) => a._t - b._t);
-      const keptXY = cleanTracePoints(cleaned.map((p) => [p.x, p.y]));
-      const keptSet = new Set(keptXY.map(([x, y]) => `${x}|${y}`));
-      const sorted = cleaned.filter((p) => keptSet.has(`${p.x}|${p.y}`));
-      if (!traceClosesLoop(sorted.map((p) => [p.x, p.y])))
-        throw new Error("trace does not close a lap");
+      const sorted = traced.samples;
 
       /* Normalize world coordinates into the 660×360 SVG viewBox. */
       const xs = sorted.map((p) => p.x);
@@ -739,7 +826,7 @@ export async function getTrackOutline() {
          car dots from SHARED bounds, so they can never drift apart. */
       const sectorsRaw = { s1: [], s2: [], s3: [] };
       sorted.forEach((p) => {
-        const t = new Date(p.date).getTime();
+        const t = p.t; // traceOneLap returns {t, x, y}
         const key = t <= b1 ? "s1" : t <= b2 ? "s2" : "s3";
         sectors[key].push(toSvg(p));
         sectorsRaw[key].push([p.x, p.y]);
@@ -1210,6 +1297,9 @@ export function buildTransform(minX, maxX, minY, maxY, view = { W: 660, H: 360, 
   };
 }
 
+/** Steps larger than this multiple of the median are dropouts, not travel. */
+export const TRACE_GAP_FACTOR = 8;
+
 /** Map OpenF1 world coordinates into the traced outline's SVG space. */
 export function projectToTrack(tf, x, y) {
   return [
@@ -1600,44 +1690,24 @@ export async function getSessionTrackTrace(sessionKey) {
     `${OPENF1_BASE}/laps?session_key=${sessionKey}&lap_number>=6&lap_number<=16`,
     { ttl: TTL.results, timeout: 20_000 }
   );
-  const candidates = (Array.isArray(laps) ? laps : []).filter(
-    (l) =>
-      l.date_start &&
-      l.lap_duration > 0 &&
-      !l.is_pit_out_lap &&
-      l.duration_sector_1 && l.duration_sector_2 && l.duration_sector_3
-  );
+  const candidates = pickLapCandidates(laps);
   if (!candidates.length) throw new Error("no clean lap for track trace");
 
-  /* Fastest clean lap = tightest racing line, least chance of an
-     off-track excursion or a slow lap wandering onto the pit entry. */
-  candidates.sort((a, b) => a.lap_duration - b.lap_duration);
-  const lap = candidates[0];
-  const t0 = new Date(lap.date_start).getTime();
-  const t1 = t0 + lap.lap_duration * 1000;
-  const iso = (ms) => encodeURIComponent(new Date(ms).toISOString());
-
-  const raw = await fetchJson(
-    `${OPENF1_BASE}/location?session_key=${sessionKey}` +
-      `&driver_number=${lap.driver_number}&date>${iso(t0)}&date<${iso(t1)}`,
-    { ttl: TTL.results, timeout: 30_000 }
-  );
-  if (!Array.isArray(raw)) throw new Error("no location data for track trace");
-
-  /* Re-filter by time in JS: if the API ever ignores the date bounds we
-     would otherwise draw the whole session (pit lane included), which is
-     exactly what produces a distorted outline with chords across it. */
-  const points = cleanTracePoints(
-    raw
-      .filter((p) => p.x != null && p.y != null && !(p.x === 0 && p.y === 0))
-      .filter((p) => p.driver_number == null || p.driver_number === lap.driver_number)
-      .map((p) => ({ t: new Date(p.date).getTime(), x: p.x, y: p.y }))
-      .filter((p) => p.t >= t0 && p.t <= t1)
-      .sort((a, b) => a.t - b.t)
-      .map((p) => [p.x, p.y])
-  );
-
-  if (points.length < 50) throw new Error(`track trace too sparse (${points.length})`);
-  if (!traceClosesLoop(points)) throw new Error("track trace does not close a lap");
-  return { points, driver: lap.driver_number, lap: lap.lap_number };
+  /* Prefer a lap with NO dropouts (gapRatio ≤ 8× median step). Keep the
+     least-broken one as a fallback so we still draw something usable. */
+  let best = null;
+  for (const lap of candidates) {
+    try {
+      const traced = await traceOneLap(sessionKey, lap, TTL.results);
+      if (!traced) continue;
+      if (traced.gapRatio <= 8) {
+        return { points: traced.points, driver: lap.driver_number, lap: lap.lap_number, gapRatio: traced.gapRatio };
+      }
+      if (!best || traced.gapRatio < best.gapRatio) best = { ...traced, driver: lap.driver_number };
+    } catch {
+      /* try the next candidate */
+    }
+  }
+  if (best) return { points: best.points, driver: best.driver, lap: best.lap.lap_number, gapRatio: best.gapRatio };
+  throw new Error(`no candidate lap produced a closed circuit (tried ${candidates.length})`);
 }

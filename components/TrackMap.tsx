@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Flag, Satellite, Info } from "lucide-react";
+import { tracePath } from "@/services/format";
 
 const SECTOR_COLORS = { s1: "#E10600", s2: "#3B9BFF", s3: "#FFD644" };
 
@@ -24,8 +25,9 @@ const MONACO_CORNERS = [
   { id: 18, name: "La Rascasse",      x: 140, y: 314, speed: 55,  gear: 2 },
 ];
 
-const toPath = (pts: number[][]) =>
-  pts.length ? `M ${pts.map((p) => p.join(" ")).join(" L ")}` : "";
+/* Gap-aware: breaks the line at GPS dropouts instead of drawing a
+   straight line across the circuit where data is missing. */
+const toPath = (pts: number[][]) => (pts.length ? tracePath(pts) : "");
 
 function SectorLegend() {
   return (
