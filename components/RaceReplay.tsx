@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Play, Pause, RotateCcw, Loader2, AlertTriangle, Swords, Flag, Radio as RadioIcon, ListOrdered } from "lucide-react";
-import { getReplayContext, getReplayWindow, projectToTrack, getReplayEvents, getTeamRadio } from "@/services/f1Service";
+import { getReplayContext, getReplayWindow, projectToTrack, buildTransform, getReplayEvents, getTeamRadio } from "@/services/f1Service";
 
 const WINDOW_MS = 60_000; // 1-minute chunks: ~5k rows each → fast individual loads
 const SPEEDS = [1, 5, 15, 30, 60];
@@ -41,6 +41,9 @@ export default function RaceReplay({ outline }: { outline: any }) {
   const buffers = useRef(new Map<number, any>());
   const fetching = useRef(new Set<number>());
   const autoStarted = useRef(false);
+  /* Holds the shared projection transform; dotFor() is declared before the
+     transform is computed, but only *called* during render after it. */
+  const tfRef = useRef<any>(null);
 
   const t0 = ctx ? new Date(ctx.dateStart).getTime() : 0; // window-grid origin
   const tEnd = ctx ? ctx.raceEnd : 0;
@@ -210,7 +213,7 @@ export default function RaceReplay({ outline }: { outline: any }) {
     const b = samples[Math.min(i + 1, samples.length - 1)];
     if (simTime - a.t > 15_000) return null;
     const f = b.t === a.t ? 0 : Math.min(1, Math.max(0, (simTime - a.t) / (b.t - a.t)));
-    return projectToTrack(outline.transform, a.x + (b.x - a.x) * f, a.y + (b.y - a.y) * f);
+    return projectToTrack(tfRef.current, a.x + (b.x - a.x) * f, a.y + (b.y - a.y) * f);
   };
 
   /* ---- Render states ---- */
@@ -267,6 +270,48 @@ export default function RaceReplay({ outline }: { outline: any }) {
      order — leaders and drivers in a highlighted overtake win priority,
      and a label is dropped if another label already sits within
      LABEL_MIN_DIST of it. The dot itself is always drawn. */
+  /* ---- Shared coordinate space ----
+     The outline transform came from ONE reference lap, so any car sitting
+     outside that lap's bounding box (grid slots, pit lane, run-off) used
+     to project outside the drawn circuit. We instead derive bounds from
+     the union of the outline's raw points and the buffered replay points,
+     then project BOTH the track path and the dots with it — so they are
+     always in the same space by construction. */
+  const view = outline.viewBox ?? { W: 660, H: 360, PAD: 30 };
+  const rawOutline: number[][] = outline.sectorsRaw
+    ? [...outline.sectorsRaw.s1, ...outline.sectorsRaw.s2, ...outline.sectorsRaw.s3]
+    : [];
+
+  const bounds = (() => {
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    const eat = (x: number, y: number) => {
+      if (!isFinite(x) || !isFinite(y)) return;
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+    };
+    rawOutline.forEach(([x, y]) => eat(x, y));
+    const outlineSpanX = maxX - minX, outlineSpanY = maxY - minY;
+    // Fold in buffered car positions, ignoring absurd outliers (bad GPS).
+    buffers.current.forEach((w: any) => {
+      Object.values(w.locations ?? {}).forEach((arr: any) => {
+        arr.forEach((s: any) => {
+          if (!outlineSpanX || !outlineSpanY) return eat(s.x, s.y);
+          const okX = s.x > minX - outlineSpanX && s.x < maxX + outlineSpanX;
+          const okY = s.y > minY - outlineSpanY && s.y < maxY + outlineSpanY;
+          if (okX && okY) eat(s.x, s.y);
+        });
+      });
+    });
+    return { minX, maxX, minY, maxY, valid: isFinite(minX) && maxX > minX };
+  })();
+
+  const tf = bounds.valid
+    ? buildTransform(bounds.minX, bounds.maxX, bounds.minY, bounds.maxY, view)
+    : outline.transform;
+
+  tfRef.current = tf;
+  const project = (x: number, y: number) => projectToTrack(tf, x, y);
+
   const LABEL_MIN_DIST = 22;
   const orderOf: Record<string, number> = {};
   standings.forEach((r: any) => (orderOf[r.code] = r.pos));
@@ -294,11 +339,21 @@ export default function RaceReplay({ outline }: { outline: any }) {
       placed.push(d.pt);
     }
   });
-  const fullPath = toPath([
-    ...outline.sectors.s1,
-    ...outline.sectors.s2.slice(1),
-    ...outline.sectors.s3.slice(1),
-  ]);
+  /* Draw the circuit from raw coords with the shared transform (falls back
+     to the pre-projected path if raw points aren't available). */
+  const fullPath = rawOutline.length
+    ? toPath(
+        [
+          ...outline.sectorsRaw.s1,
+          ...outline.sectorsRaw.s2.slice(1),
+          ...outline.sectorsRaw.s3.slice(1),
+        ].map(([x, y]: number[]) => project(x, y).map((n) => +n.toFixed(1)))
+      )
+    : toPath([
+        ...outline.sectors.s1,
+        ...outline.sectors.s2.slice(1),
+        ...outline.sectors.s3.slice(1),
+      ]);
 
   return (
     <div className="grid gap-4 lg:grid-cols-[1fr_240px]">

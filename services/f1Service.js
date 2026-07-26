@@ -689,22 +689,31 @@ export async function getTrackOutline() {
       const b1 = t0 + lap.duration_sector_1 * 1000;
       const b2 = b1 + lap.duration_sector_2 * 1000;
       const sectors = { s1: [], s2: [], s3: [] };
+      /* Raw world coords too: the replay re-projects the outline and the
+         car dots from SHARED bounds, so they can never drift apart. */
+      const sectorsRaw = { s1: [], s2: [], s3: [] };
       sorted.forEach((p) => {
         const t = new Date(p.date).getTime();
         const key = t <= b1 ? "s1" : t <= b2 ? "s2" : "s3";
         sectors[key].push(toSvg(p));
+        sectorsRaw[key].push([p.x, p.y]);
       });
 
       /* Stitch segment joints and close the loop for a continuous line. */
       if (sectors.s1.length && sectors.s2.length) sectors.s2.unshift(sectors.s1[sectors.s1.length - 1]);
       if (sectors.s2.length && sectors.s3.length) sectors.s3.unshift(sectors.s2[sectors.s2.length - 1]);
       if (sectors.s3.length && sectors.s1.length) sectors.s3.push(sectors.s1[0]);
+      if (sectorsRaw.s1.length && sectorsRaw.s2.length) sectorsRaw.s2.unshift(sectorsRaw.s1[sectorsRaw.s1.length - 1]);
+      if (sectorsRaw.s2.length && sectorsRaw.s3.length) sectorsRaw.s3.unshift(sectorsRaw.s2[sectorsRaw.s2.length - 1]);
+      if (sectorsRaw.s3.length && sectorsRaw.s1.length) sectorsRaw.s3.push(sectorsRaw.s1[0]);
       if (sectors.s1.length < 5 || sectors.s2.length < 5 || sectors.s3.length < 5)
         throw new Error("sector split produced degenerate segments");
 
       return {
         source: "telemetry",
         sectors,
+        sectorsRaw,
+        viewBox: { W, H, PAD },
         referenceDriver: lap.driver_number,
         lap: lap.lap_number,
         /* Same transform used for the outline — replay dots reuse it so
@@ -1138,6 +1147,22 @@ export async function getPositionWorm() {
  * fetch the full ~2M-point race in one request. True-live later =
  * same component, authenticated WebSocket source instead.
  * ================================================================ */
+
+/**
+ * Build a projection transform from world-coordinate bounds.
+ * Used for BOTH the traced outline and the live car dots so the two can
+ * never end up in different coordinate spaces (the cause of dots
+ * appearing beside the circuit instead of on it).
+ */
+export function buildTransform(minX, maxX, minY, maxY, view = { W: 660, H: 360, PAD: 30 }) {
+  const { W, H, PAD } = view;
+  const scale = Math.min((W - 2 * PAD) / (maxX - minX || 1), (H - 2 * PAD) / (maxY - minY || 1));
+  return {
+    minX, minY, scale, H,
+    ox: (W - (maxX - minX) * scale) / 2,
+    oy: (H - (maxY - minY) * scale) / 2,
+  };
+}
 
 /** Map OpenF1 world coordinates into the traced outline's SVG space. */
 export function projectToTrack(tf, x, y) {
