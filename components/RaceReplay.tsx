@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Play, Pause, RotateCcw, Loader2, AlertTriangle, Swords, Flag, Radio as RadioIcon, ListOrdered } from "lucide-react";
 import { getReplayContext, getReplayWindow, projectToTrack, buildTransform, getReplayEvents, getTeamRadio, getSessionTrackTrace } from "@/services/f1Service";
 import { clearApiCache } from "@/services/apiClient";
+import { tracePath } from "@/services/format";
 
 const WINDOW_MS = 60_000; // 1-minute chunks: ~5k rows each → fast individual loads
 const SPEEDS = [1, 5, 15, 30, 60];
@@ -349,7 +350,7 @@ export default function RaceReplay({ outline }: { outline: any }) {
   /* Draw the circuit from raw coords with the shared transform (falls back
      to the pre-projected path if raw points aren't available). */
   const fullPath = rawOutline.length
-    ? toPath(rawOutline.map(([x, y]: number[]) => project(x, y).map((n) => +n.toFixed(1))))
+    ? tracePath(rawOutline.map(([x, y]: number[]) => project(x, y).map((n) => +n.toFixed(1))))
     : "";
 
   return (
