@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Play, Pause, RotateCcw, Loader2, AlertTriangle, Swords, Flag, Radio as RadioIcon, ListOrdered } from "lucide-react";
-import { getReplayContext, getReplayWindow, projectToTrack, buildTransform, getReplayEvents, getTeamRadio, getSessionTrackTrace, clearApiCache } from "@/services/f1Service";
+import { getReplayContext, getReplayWindow, projectToTrack, buildTransform, getReplayEvents, getTeamRadio, getSessionTrackTrace } from "@/services/f1Service";
+import { clearApiCache } from "@/services/apiClient";
 
 const WINDOW_MS = 60_000; // 1-minute chunks: ~5k rows each → fast individual loads
 const SPEEDS = [1, 5, 15, 30, 60];
