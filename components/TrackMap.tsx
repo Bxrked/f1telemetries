@@ -171,7 +171,7 @@ export default function TrackMap({ circuitName, outline }: { circuitName?: strin
               ) : (
                 <>
                   <Info size={13} className="text-sector-yellow" />
-                  Illustrative layout — live circuit trace unavailable
+                  Illustrative layout — no clean GPS lap available for this circuit
                 </>
               )}
             </span>
