@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Play, Pause, RotateCcw, Loader2, AlertTriangle, Swords, Flag, Radio as RadioIcon, ListOrdered } from "lucide-react";
-import { getReplayContext, getReplayWindow, projectToTrack, buildTransform, getReplayEvents, getTeamRadio } from "@/services/f1Service";
+import { getReplayContext, getReplayWindow, projectToTrack, buildTransform, getReplayEvents, getTeamRadio, getSessionTrackTrace, clearApiCache } from "@/services/f1Service";
 
 const WINDOW_MS = 60_000; // 1-minute chunks: ~5k rows each → fast individual loads
 const SPEEDS = [1, 5, 15, 30, 60];
@@ -44,6 +44,7 @@ export default function RaceReplay({ outline }: { outline: any }) {
   /* Holds the shared projection transform; dotFor() is declared before the
      transform is computed, but only *called* during render after it. */
   const tfRef = useRef<any>(null);
+  const [trace, setTrace] = useState<any>(null);
 
   const t0 = ctx ? new Date(ctx.dateStart).getTime() : 0; // window-grid origin
   const tEnd = ctx ? ctx.raceEnd : 0;
@@ -72,6 +73,9 @@ export default function RaceReplay({ outline }: { outline: any }) {
     if (!ctx) return;
     getReplayEvents().then(setEvents).catch(() => setEvents([]));
     getTeamRadio().then(setRadio).catch(() => setRadio([]));
+    /* Trace the circuit from THIS session's own stream — same coordinate
+       frame as the car dots, so they can't diverge. */
+    getSessionTrackTrace(ctx.sessionKey).then(setTrace).catch(() => setTrace(null));
   }, [ctx]);
 
   const jumpTo = useCallback((t: number) => {
@@ -200,7 +204,7 @@ export default function RaceReplay({ outline }: { outline: any }) {
 
   /* ---- Dot positions ---- */
   const dotFor = (num: number): number[] | null => {
-    if (simTime == null || !outline?.transform) return null;
+    if (simTime == null || !tfRef.current) return null;
     const ws = windowStartFor(simTime);
     const samples = [
       ...(buffers.current.get(ws - WINDOW_MS)?.locations?.[num] ?? []),
@@ -217,7 +221,7 @@ export default function RaceReplay({ outline }: { outline: any }) {
   };
 
   /* ---- Render states ---- */
-  if (!outline?.transform) {
+  if (!outline?.transform && !trace) {
     return (
       <p className="flex items-center gap-2 rounded-lg border border-carbon-700 bg-carbon-900/60 px-4 py-3 text-xs text-carbon-400">
         <AlertTriangle size={13} className="text-sector-yellow" />
@@ -277,8 +281,10 @@ export default function RaceReplay({ outline }: { outline: any }) {
      the union of the outline's raw points and the buffered replay points,
      then project BOTH the track path and the dots with it — so they are
      always in the same space by construction. */
-  const view = outline.viewBox ?? { W: 660, H: 360, PAD: 30 };
-  const rawOutline: number[][] = outline.sectorsRaw
+  const view = outline?.viewBox ?? { W: 660, H: 360, PAD: 30 };
+  const rawOutline: number[][] = trace?.points?.length
+    ? trace.points
+    : outline?.sectorsRaw
     ? [...outline.sectorsRaw.s1, ...outline.sectorsRaw.s2, ...outline.sectorsRaw.s3]
     : [];
 
@@ -307,7 +313,7 @@ export default function RaceReplay({ outline }: { outline: any }) {
 
   const tf = bounds.valid
     ? buildTransform(bounds.minX, bounds.maxX, bounds.minY, bounds.maxY, view)
-    : outline.transform;
+    : outline?.transform;
 
   tfRef.current = tf;
   const project = (x: number, y: number) => projectToTrack(tf, x, y);
@@ -342,18 +348,8 @@ export default function RaceReplay({ outline }: { outline: any }) {
   /* Draw the circuit from raw coords with the shared transform (falls back
      to the pre-projected path if raw points aren't available). */
   const fullPath = rawOutline.length
-    ? toPath(
-        [
-          ...outline.sectorsRaw.s1,
-          ...outline.sectorsRaw.s2.slice(1),
-          ...outline.sectorsRaw.s3.slice(1),
-        ].map(([x, y]: number[]) => project(x, y).map((n) => +n.toFixed(1)))
-      )
-    : toPath([
-        ...outline.sectors.s1,
-        ...outline.sectors.s2.slice(1),
-        ...outline.sectors.s3.slice(1),
-      ]);
+    ? toPath(rawOutline.map(([x, y]: number[]) => project(x, y).map((n) => +n.toFixed(1))))
+    : "";
 
   return (
     <div className="grid gap-4 lg:grid-cols-[1fr_240px]">
@@ -373,6 +369,13 @@ export default function RaceReplay({ outline }: { outline: any }) {
             aria-label="Back to lights out"
           >
             <RotateCcw size={13} />
+          </button>
+          <button
+            onClick={() => { clearApiCache(); window.location.reload(); }}
+            title="Clear cached data and reload (use if the map or timing looks stale)"
+            className="timing rounded-md border border-carbon-600 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-carbon-400 transition hover:text-carbon-100"
+          >
+            reset
           </button>
           {SPEEDS.map((s) => (
             <button

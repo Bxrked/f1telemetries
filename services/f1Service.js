@@ -622,6 +622,42 @@ export async function getDemographics() {
   return demographicsFrom(drivers);
 }
 
+
+/**
+ * Clean a raw GPS trace into a drawable racing line.
+ * OpenF1 location data can contain teleports: duplicate timestamps,
+ * momentary dropouts, or samples that slip in from another lap/driver.
+ * Connecting those in time order draws long chords straight across the
+ * circuit — the "map crosses itself" symptom. We drop any sample that
+ * jumps more than a few multiples of the median step from the last good
+ * point, which removes the chords while keeping the true racing line.
+ */
+function cleanTracePoints(pts) {
+  if (pts.length < 20) return pts;
+  const steps = [];
+  for (let i = 1; i < pts.length; i++) {
+    steps.push(Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+  }
+  const sorted = [...steps].sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)] || 1;
+  const limit = median * 6;
+  const out = [pts[0]];
+  for (let i = 1; i < pts.length; i++) {
+    const prev = out[out.length - 1];
+    if (Math.hypot(pts[i][0] - prev[0], pts[i][1] - prev[1]) <= limit) out.push(pts[i]);
+  }
+  return out;
+}
+
+/** A valid lap trace must return roughly to where it started. */
+function traceClosesLoop(pts, tolerance = 0.25) {
+  if (pts.length < 20) return false;
+  const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+  const diag = Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+  const gap = Math.hypot(pts[0][0] - pts[pts.length - 1][0], pts[0][1] - pts[pts.length - 1][1]);
+  return diag > 0 && gap / diag <= tolerance;
+}
+
 /**
  * Track outline traced from real car telemetry (OpenF1 /location).
  * One clean mid-race lap from any driver draws the circuit for ANY
@@ -667,9 +703,19 @@ export async function getTrackOutline() {
       if (!Array.isArray(raw) || raw.length < 50)
         throw new Error(`insufficient location samples (got ${Array.isArray(raw) ? raw.length : "non-array"})`);
 
-      const sorted = raw
-        .filter((p) => p.x != null && p.y != null)
-        .sort((a, b) => new Date(a.date) - new Date(b.date));
+      /* Keep only this driver's samples inside the lap window, drop
+         null/zero fixes, then strip teleports before drawing. */
+      const cleaned = raw
+        .filter((p) => p.x != null && p.y != null && !(p.x === 0 && p.y === 0))
+        .filter((p) => p.driver_number == null || p.driver_number === lap.driver_number)
+        .map((p) => ({ ...p, _t: new Date(p.date).getTime() }))
+        .filter((p) => p._t >= t0 && p._t <= t0 + totalMs)
+        .sort((a, b) => a._t - b._t);
+      const keptXY = cleanTracePoints(cleaned.map((p) => [p.x, p.y]));
+      const keptSet = new Set(keptXY.map(([x, y]) => `${x}|${y}`));
+      const sorted = cleaned.filter((p) => keptSet.has(`${p.x}|${p.y}`));
+      if (!traceClosesLoop(sorted.map((p) => [p.x, p.y])))
+        throw new Error("trace does not close a lap");
 
       /* Normalize world coordinates into the 660×360 SVG viewBox. */
       const xs = sorted.map((p) => p.x);
@@ -1536,4 +1582,62 @@ export async function getDriverComparison() {
       return { totalLaps: total, drivers: rows };
     }
   );
+}
+
+/**
+ * Trace the circuit from a session's OWN location stream.
+ * ------------------------------------------------------------------
+ * The replay previously drew the track from getTrackOutline(), which
+ * independently re-resolves the race/session. Any drift between the two
+ * (stale cache, different session match, a bad reference lap) put the
+ * car dots and the circuit in different coordinate frames — cars beside
+ * the track instead of on it. Taking the trace from the SAME sessionKey
+ * the dots use makes that impossible by construction.
+ * Returns raw world coords: [[x, y], ...] for one clean lap.
+ */
+export async function getSessionTrackTrace(sessionKey) {
+  const laps = await fetchJson(
+    `${OPENF1_BASE}/laps?session_key=${sessionKey}&lap_number>=6&lap_number<=16`,
+    { ttl: TTL.results, timeout: 20_000 }
+  );
+  const candidates = (Array.isArray(laps) ? laps : []).filter(
+    (l) =>
+      l.date_start &&
+      l.lap_duration > 0 &&
+      !l.is_pit_out_lap &&
+      l.duration_sector_1 && l.duration_sector_2 && l.duration_sector_3
+  );
+  if (!candidates.length) throw new Error("no clean lap for track trace");
+
+  /* Fastest clean lap = tightest racing line, least chance of an
+     off-track excursion or a slow lap wandering onto the pit entry. */
+  candidates.sort((a, b) => a.lap_duration - b.lap_duration);
+  const lap = candidates[0];
+  const t0 = new Date(lap.date_start).getTime();
+  const t1 = t0 + lap.lap_duration * 1000;
+  const iso = (ms) => encodeURIComponent(new Date(ms).toISOString());
+
+  const raw = await fetchJson(
+    `${OPENF1_BASE}/location?session_key=${sessionKey}` +
+      `&driver_number=${lap.driver_number}&date>${iso(t0)}&date<${iso(t1)}`,
+    { ttl: TTL.results, timeout: 30_000 }
+  );
+  if (!Array.isArray(raw)) throw new Error("no location data for track trace");
+
+  /* Re-filter by time in JS: if the API ever ignores the date bounds we
+     would otherwise draw the whole session (pit lane included), which is
+     exactly what produces a distorted outline with chords across it. */
+  const points = cleanTracePoints(
+    raw
+      .filter((p) => p.x != null && p.y != null && !(p.x === 0 && p.y === 0))
+      .filter((p) => p.driver_number == null || p.driver_number === lap.driver_number)
+      .map((p) => ({ t: new Date(p.date).getTime(), x: p.x, y: p.y }))
+      .filter((p) => p.t >= t0 && p.t <= t1)
+      .sort((a, b) => a.t - b.t)
+      .map((p) => [p.x, p.y])
+  );
+
+  if (points.length < 50) throw new Error(`track trace too sparse (${points.length})`);
+  if (!traceClosesLoop(points)) throw new Error("track trace does not close a lap");
+  return { points, driver: lap.driver_number, lap: lap.lap_number };
 }
