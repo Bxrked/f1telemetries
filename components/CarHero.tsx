@@ -1,7 +1,18 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useReducedMotion } from "framer-motion";
+
+/**
+ * Source of the hero clip.
+ *
+ * public/ is gitignored — the footage is third-party media and doesn't
+ * belong in a public repo — so a clone or CI build has no local file.
+ * Set NEXT_PUBLIC_CAR_VIDEO_URL to a hosted copy (Vercel Blob, S3, any
+ * CDN) and it's used instead; otherwise we fall back to the local path
+ * for development.
+ */
+const VIDEO_SRC = process.env.NEXT_PUBLIC_CAR_VIDEO_URL || "/car-reveal.mp4";
 
 /**
  * Fullscreen car reveal.
@@ -20,6 +31,9 @@ import { useReducedMotion } from "framer-motion";
 export default function CarHero({ className = "" }: { className?: string }) {
   const reduced = useReducedMotion();
   const ref = useRef<HTMLVideoElement>(null);
+  /* A missing clip must degrade to a designed backdrop, not a black void
+     with buttons floating on it. */
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     const v = ref.current;
@@ -41,15 +55,33 @@ export default function CarHero({ className = "" }: { className?: string }) {
     v.play().catch(() => {});
   }, [reduced]);
 
+  /* Fallback: a lit carbon backdrop rather than nothing. Keeps the page
+     looking deliberate on any clone or deploy without the media. */
+  if (failed) {
+    return (
+      <div
+        className={`h-full w-full ${className}`}
+        aria-hidden
+        style={{
+          background:
+            "radial-gradient(120% 90% at 50% 8%, rgba(225,6,0,0.16), transparent 60%)," +
+            "radial-gradient(80% 60% at 50% 100%, rgba(225,6,0,0.06), transparent 70%)," +
+            "repeating-linear-gradient(45deg, rgba(255,255,255,0.012) 0 2px, transparent 2px 4px)",
+        }}
+      />
+    );
+  }
+
   return (
     <video
       ref={ref}
       className={`h-full w-full object-cover ${className}`}
-      src="/car-reveal.mp4"
+      src={VIDEO_SRC}
       muted
       playsInline
       autoPlay={!reduced}
       preload="auto"
+      onError={() => setFailed(true)}
       aria-label="Formula 1 car reveal"
     />
   );
