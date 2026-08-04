@@ -2,6 +2,8 @@ import type { Metadata, Viewport } from "next";
 import { Titillium_Web, Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import SiteNav from "@/components/SiteNav";
+import MotionProvider from "@/components/MotionProvider";
+import RouteCinematic from "@/components/RouteCinematic";
 
 /* Display face: Titillium Web — the family F1's own branding is built on. */
 const display = Titillium_Web({
@@ -74,9 +76,20 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className="dark">
-      <body className={`${display.variable} ${body.variable} ${timing.variable} font-sans`}>
-        <SiteNav />
-        {children}
+      {/* Flex column so a full-height page can claim exactly the space the
+          nav leaves, without hardcoding the nav's height (it varies by
+          breakpoint). Pages that don't opt into flex-1 size naturally. */}
+      <body
+        className={`${display.variable} ${body.variable} ${timing.variable} flex min-h-svh flex-col font-sans`}
+      >
+        {/* Global reduced-motion honouring for all Framer Motion animation,
+            layered on top of the CSS block in globals.css. */}
+        <MotionProvider>
+          <RouteCinematic>
+            <SiteNav />
+            {children}
+          </RouteCinematic>
+        </MotionProvider>
       </body>
     </html>
   );

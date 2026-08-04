@@ -48,8 +48,32 @@ const config: Config = {
         sans: ["var(--font-body)", "sans-serif"],
         mono: ["var(--font-timing)", "monospace"],
       },
+      /* Type scale — rem-based so it participates in the desktop step-up
+         in globals.css. Replaces scattered text-[10px]/[11px] literals,
+         which were px and therefore did NOT scale with the rest. */
+      fontSize: {
+        micro: ["0.625rem", { lineHeight: "1.4", letterSpacing: "0.02em" }],
+        data: ["0.6875rem", { lineHeight: "1.45" }],
+        label: ["0.75rem", { lineHeight: "1.4" }],
+      },
+      /* Tight radii: this is a timing screen, not a marketing page. */
+      borderRadius: {
+        panel: "6px",
+        row: "4px",
+      },
+      transitionTimingFunction: {
+        "out-expo": "cubic-bezier(0.16, 1, 0.3, 1)",
+        "in-expo": "cubic-bezier(0.7, 0, 0.84, 0)",
+      },
+      transitionDuration: {
+        micro: "180ms",
+        layout: "350ms",
+        exit: "120ms",
+      },
       boxShadow: {
-        panel: "0 1px 0 0 rgba(255,255,255,0.03) inset, 0 12px 32px -16px rgba(0,0,0,0.8)",
+        /* Hairline top highlight only. The heavy drop shadow made panels
+           float like generic SaaS cards; density reads better flat. */
+        panel: "0 1px 0 0 rgba(255,255,255,0.04) inset",
         "red-glow": "0 0 24px rgba(225, 6, 0, 0.25)",
       },
       backgroundImage: {
@@ -60,11 +84,25 @@ const config: Config = {
       },
       animation: {
         "pulse-dot": "pulseDot 1.6s cubic-bezier(0.4, 0, 0.6, 1) infinite",
+        /* Loading sweep — the most-watched animation on the site, since
+           every panel shows it on every load. A flat opacity pulse reads
+           as "broken"; a directional sweep reads as "working". */
+        shimmer: "shimmer 1.4s ease-in-out infinite",
+        "scan-line": "scanLine 2.6s linear infinite",
       },
       keyframes: {
         pulseDot: {
           "0%, 100%": { opacity: "1" },
           "50%": { opacity: "0.35" },
+        },
+        shimmer: {
+          "0%": { transform: "translateX(-100%)" },
+          "100%": { transform: "translateX(200%)" },
+        },
+        scanLine: {
+          "0%": { transform: "translateY(0)", opacity: "0" },
+          "10%, 90%": { opacity: "0.5" },
+          "100%": { transform: "translateY(100%)", opacity: "0" },
         },
       },
     },

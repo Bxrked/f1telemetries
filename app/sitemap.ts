@@ -1,4 +1,5 @@
 import type { MetadataRoute } from "next";
+import { FEATURES } from "@/services/features";
 
 const SITE = "https://f1telemetries.com";
 
@@ -7,7 +8,10 @@ export default function sitemap(): MetadataRoute.Sitemap {
   return [
     { url: `${SITE}/`, lastModified: now, changeFrequency: "weekly", priority: 1 },
     { url: `${SITE}/telemetry`, lastModified: now, changeFrequency: "weekly", priority: 0.9 },
-    { url: `${SITE}/live`, lastModified: now, changeFrequency: "weekly", priority: 0.8 },
+    /* Replay shelved — /live redirects, so keep it out of the sitemap. */
+    ...(FEATURES.raceReplay
+      ? [{ url: `${SITE}/live`, lastModified: now, changeFrequency: "weekly" as const, priority: 0.8 }]
+      : []),
     { url: `${SITE}/compare`, lastModified: now, changeFrequency: "weekly", priority: 0.7 },
   ];
 }

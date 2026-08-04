@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Flag, Satellite, Info } from "lucide-react";
+import { Flag, Satellite, Info, MapPinned } from "lucide-react";
 import { tracePath } from "@/services/format";
 
 const SECTOR_COLORS = { s1: "#E10600", s2: "#3B9BFF", s3: "#FFD644" };
@@ -56,6 +56,29 @@ export default function TrackMap({ circuitName, outline }: { circuitName?: strin
   const isMonaco = /monaco|monte carlo/i.test(circuitName ?? "Monaco");
   const showCorners = !live && isMonaco;
 
+  /* The fallback shape is Monaco. Drawing it under another circuit's name
+     told the reader "this is the Hungaroring" while showing Monaco's
+     actual layout — a caption saying "illustrative" doesn't undo a
+     recognisable wrong shape. Anywhere but Monaco we now show no map at
+     all, matching the data layer's rule: refuse rather than mislead. */
+  const wrongCircuit = !live && !isMonaco;
+
+  if (wrongCircuit) {
+    return (
+      <div className="flex h-full min-h-[260px] flex-col items-center justify-center gap-3 rounded-row bg-carbon-900/40 px-6 text-center">
+        <MapPinned size={22} className="text-carbon-600" />
+        <p className="timing text-label font-bold uppercase tracking-wider text-carbon-300">
+          Circuit map unavailable
+        </p>
+        <p className="max-w-sm text-data leading-relaxed text-carbon-400">
+          The map is traced from live GPS for {circuitName ?? "this circuit"}, and no lap with
+          usable positioning data came back for this session. Rather than draw a different
+          circuit&apos;s shape here, we show nothing.
+        </p>
+      </div>
+    );
+  }
+
   const sectorPaths = live
     ? {
         s1: toPath(outline.sectors.s1),
@@ -69,12 +92,23 @@ export default function TrackMap({ circuitName, outline }: { circuitName?: strin
   const start = live ? outline.sectors.s1[0] : [320, 300];
 
   return (
-    <div className="relative">
+    /* Fills the panel body so the map grows with the hero band instead of
+       being pinned to its own aspect ratio. */
+    <div className="relative flex h-full min-h-0 flex-col">
       <svg
-        viewBox="0 0 660 360"
+        /* Read the frame from the payload rather than assuming one — the
+           traced outline is normalised into its own box, and hardcoding a
+           different aspect here is what letterboxed the map. The Monaco
+           fallback paths are still authored against 660×360. */
+        viewBox={
+          live && outline?.viewBox
+            ? `0 0 ${outline.viewBox.W} ${outline.viewBox.H}`
+            : "0 0 660 360"
+        }
         role="img"
         aria-label={`${circuitName ?? "Circuit"} track map with sector colouring`}
-        className="w-full"
+        preserveAspectRatio="xMidYMid meet"
+        className="min-h-0 w-full flex-1"
       >
         <defs>
           <filter id="trackGlow" x="-20%" y="-20%" width="140%" height="140%">
