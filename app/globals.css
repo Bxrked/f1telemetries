@@ -13,11 +13,15 @@
   }
 }
 
+/* True black backdrop — the car and the timing data are the only things
+   meant to carry light. The carbon weave stays as a very faint texture so
+   large empty areas don't read as a dead void. */
 body {
-  @apply bg-carbon-950 text-carbon-100 antialiased;
+  @apply text-carbon-100 antialiased;
+  background-color: #000;
   background-image:
-    radial-gradient(1200px 500px at 50% -10%, rgba(225, 6, 0, 0.07), transparent 60%),
-    repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.012) 0 2px, transparent 2px 4px);
+    radial-gradient(1100px 460px at 50% -8%, rgba(225, 6, 0, 0.05), transparent 62%),
+    repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.01) 0 2px, transparent 2px 4px);
 }
 
 /* Timing-screen scrollbars */
@@ -41,5 +45,38 @@ body {
   }
   .timing {
     @apply font-mono tabular-nums;
+  }
+
+  /* Loading surface with a directional sweep. `isolate` + overflow-hidden
+     keep the sweep inside the block; the ::after is the moving highlight. */
+  .skeleton {
+    @apply relative isolate overflow-hidden rounded-row bg-carbon-900;
+  }
+  .skeleton::after {
+    content: "";
+    @apply absolute inset-0 animate-shimmer;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(255, 255, 255, 0.05) 45%,
+      rgba(225, 6, 0, 0.07) 55%,
+      transparent 100%
+    );
+  }
+
+  /* Session best / personal best — FIA timing-screen convention.
+     Purple beats everything on track, green beats your own previous. */
+  .best-session {
+    @apply text-sector-purple;
+  }
+  .best-personal {
+    @apply text-sector-green;
+  }
+}
+
+/* A stationary sweep is worse than none for reduced-motion users. */
+@media (prefers-reduced-motion: reduce) {
+  .skeleton::after {
+    display: none;
   }
 }

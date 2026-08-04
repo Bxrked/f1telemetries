@@ -32,7 +32,7 @@ export default function LiveRacePage() {
 
   if (!ready) {
     return (
-      <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 2xl:max-w-[1440px]">
+      <main className="mx-auto w-full min-w-0 max-w-7xl px-4 py-8 sm:px-6 2xl:max-w-[1440px]">
         <div className="h-16 w-2/3 animate-pulse rounded-xl bg-carbon-850" />
         <div className="mt-4 h-[460px] animate-pulse rounded-xl bg-carbon-850" />
         <p className="timing mt-6 text-center text-xs text-carbon-400">Preparing broadcast…</p>
@@ -41,7 +41,7 @@ export default function LiveRacePage() {
   }
 
   return (
-    <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 2xl:max-w-[1440px]">
+    <main className="mx-auto w-full min-w-0 max-w-7xl px-4 py-8 sm:px-6 2xl:max-w-[1440px]">
       <header className="mb-6 flex flex-wrap items-end justify-between gap-3 border-b border-carbon-700 pb-5">
         <div>
           <p className="eyebrow mb-1 flex items-center gap-2">

@@ -623,142 +623,133 @@ export async function getDemographics() {
 }
 
 
-/**
- * Clean a raw GPS trace into a drawable racing line.
- * ------------------------------------------------------------------
- * Measured against real OpenF1 data (Hungary 2026, driver #81 lap 7):
- * 318 samples at a correct 3.7 Hz, single driver, correct time window —
- * but a max step of 3674 units (≈367 m in 0.27 s, impossible) and a
- * start/end 67% of the circuit diagonal apart. So the stream contains
- * isolated spikes, and lap metadata cannot be trusted to bound a lap.
+/* ================================================================
+ * CIRCUIT TRACING  (deliberately simple)
+ * ----------------------------------------------------------------
+ * The original version drew the FIRST clean lap it found, unvalidated.
+ * That worked whenever that lap happened to have good GPS and drew a
+ * self-crossing mess when it didn't (Spa) — pure luck of the draw.
  *
- * spike filter: a point is dropped only if it is far from BOTH of its
- * neighbours — an isolated jump. Anchoring to the previous *kept* point
- * (the old approach) fails when the very first sample is itself bad.
- */
-function despikeTrace(pts, factor = 6) {
-  if (pts.length < 20) return pts;
-  const step = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
-  const steps = [];
-  for (let i = 1; i < pts.length; i++) steps.push(step(pts[i], pts[i - 1]));
-  const sorted = [...steps].sort((a, b) => a - b);
-  const median = sorted[Math.floor(sorted.length / 2)] || 1;
-  const limit = median * factor;
+ * Measured evidence (Hungary 2026): driver #81 lap 7 ends 26% of the
+ * circuit away from where it started — unusable. Driver #44 lap 15 ends
+ * 3% away — clean. So the ONLY thing that actually needed fixing was
+ * *which lap we pick*.
+ *
+ * Everything else I tried (spike filters, loop truncation, breaking the
+ * line at "gaps") was threshold-guessing and each one broke the map in a
+ * new way. It's gone. We score a handful of laps by how well they close
+ * and draw the best one exactly the way the original did.
+ * ================================================================ */
 
-  const out = [];
-  for (let i = 0; i < pts.length; i++) {
-    const prev = pts[i - 1], next = pts[i + 1];
-    const farPrev = prev ? step(pts[i], prev) > limit : false;
-    const farNext = next ? step(pts[i], next) > limit : false;
-    /* Isolated spike = detached from both sides. Endpoints need only one
-       detached side to be considered bad. */
-    const isolated = prev && next ? farPrev && farNext : farPrev || farNext;
-    if (!isolated) out.push(pts[i]);
-  }
-  return out.length >= 20 ? out : pts;
-}
-
-/**
- * Close the lap empirically: walk forward from the first point and find
- * where the car comes back nearest to it. Works regardless of whether
- * lap date_start / lap_duration line up with the start-finish line.
- * Returns the truncated closed loop, or null if it never returns.
- */
-function closeLoop(pts, minFraction = 0.6) {
-  if (pts.length < 40) return null;
-  const start = pts[0];
-  const from = Math.floor(pts.length * minFraction);
-  let bestIdx = -1, bestDist = Infinity;
-  for (let i = from; i < pts.length; i++) {
-    const d = Math.hypot(pts[i][0] - start[0], pts[i][1] - start[1]);
-    if (d < bestDist) { bestDist = d; bestIdx = i; }
-  }
-  if (bestIdx < 0) return null;
-  const loop = pts.slice(0, bestIdx + 1);
-  const xs = loop.map((p) => p[0]), ys = loop.map((p) => p[1]);
+/** Closure error of a raw trace, as a fraction of its bounding diagonal. */
+function closureError(points) {
+  if (points.length < 20) return Infinity;
+  const xs = points.map((p) => p[0]), ys = points.map((p) => p[1]);
   const diag = Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
-  /* Accept only if it genuinely returns near the start. */
-  return diag > 0 && bestDist / diag <= 0.12 ? loop : null;
+  if (!diag) return Infinity;
+  const gap = Math.hypot(
+    points[0][0] - points[points.length - 1][0],
+    points[0][1] - points[points.length - 1][1]
+  );
+  return gap / diag;
 }
 
-
-/**
- * Try several candidate laps until one yields a valid closed circuit.
- * Real data (Hungary 2026): driver #81 lap 7 has a GPS gap and closes at
- * only 26.2% — unusable — while driver #44 lap 15 closes at 3.0%. A
- * single-lap approach therefore fails intermittently by luck of the draw.
- * Candidates are de-duplicated per driver so one car's bad GPS unit can't
- * consume every attempt.
- */
-function pickLapCandidates(laps, maxCandidates = 6) {
+/** Up to `max` clean laps, one per driver, so one faulty GPS unit can't
+    consume every attempt. */
+function pickLapCandidates(laps, max = 8) {
   const clean = (Array.isArray(laps) ? laps : []).filter(
     (l) =>
       l.date_start && l.lap_duration > 0 && !l.is_pit_out_lap &&
       l.duration_sector_1 && l.duration_sector_2 && l.duration_sector_3
   );
-  clean.sort((a, b) => a.lap_duration - b.lap_duration);
+  if (!clean.length) return [];
+
+  /* Drop pit-in and safety-car laps before spending a /location request
+     on them: a lap well off the field's median either left the circuit
+     for the pit lane or crawled behind a SC, and neither traces a shape
+     that closes. 7% is the same clean-lap threshold used for pace and
+     degradation. Fall back to the raw set if the filter is too strict to
+     leave a usable pool. */
+  const med = median(clean.map((l) => l.lap_duration));
+  const representative = med ? clean.filter((l) => l.lap_duration <= med * 1.07) : clean;
+  const pool = representative.length >= 4 ? representative : clean;
+
   const seen = new Set();
   const picks = [];
-  for (const l of clean) {
-    if (seen.has(l.driver_number)) continue;   // one lap per driver first
+  for (const l of pool) {
+    if (seen.has(l.driver_number)) continue;
     seen.add(l.driver_number);
     picks.push(l);
-    if (picks.length >= maxCandidates) break;
-  }
-  /* Top up with any remaining laps if the field was small. */
-  for (const l of clean) {
-    if (picks.length >= maxCandidates) break;
-    if (!picks.includes(l)) picks.push(l);
+    if (picks.length >= max) break;
   }
   return picks;
 }
 
-/** Fetch + clean + close one candidate lap. Returns null if unusable. */
-async function traceOneLap(sessionKey, lap, ttl) {
+/** Fetch one lap of positions. Returns timestamped samples, unmodified. */
+async function fetchLapSamples(sessionKey, lap, ttl) {
   const t0 = new Date(lap.date_start).getTime();
-  const windowMs = lap.lap_duration * 1000 * 1.4; // over-fetch; we self-close
+  const totalMs = lap.lap_duration * 1000;
   const iso = (ms) => encodeURIComponent(new Date(ms).toISOString());
   const raw = await fetchJson(
     `${OPENF1_BASE}/location?session_key=${sessionKey}` +
-      `&driver_number=${lap.driver_number}&date>${iso(t0)}&date<${iso(t0 + windowMs)}`,
+      `&driver_number=${lap.driver_number}&date>${iso(t0)}&date<${iso(t0 + totalMs)}`,
     { ttl, timeout: 30_000 }
   );
-  if (!Array.isArray(raw) || raw.length < 60) return null;
-
+  if (!Array.isArray(raw) || raw.length < 50) return null;
   const samples = raw
     .filter((p) => p.x != null && p.y != null && !(p.x === 0 && p.y === 0))
-    .filter((p) => p.driver_number == null || p.driver_number === lap.driver_number)
     .map((p) => ({ t: new Date(p.date).getTime(), x: p.x, y: p.y }))
     .sort((a, b) => a.t - b.t);
-  if (samples.length < 60) return null;
+  return samples.length >= 50 ? { samples, lap, t0 } : null;
+}
 
-  const despiked = despikeTrace(samples.map((s) => [s.x, s.y]));
-  const loop = closeLoop(despiked);
-  if (!loop) return null;
+/* One trace per session, shared by the map and the replay (they used to
+   each run the whole search, which is why /live was slow to open). */
+const circuitTraceCache = new Map();
 
-  /* Continuity check. Despiking removes isolated bad samples, but a genuine
-     dropout leaves two *valid* points with a hole between them — drawn as a
-     straight line that cuts across the circuit. Score the worst gap so the
-     caller can prefer a lap with unbroken data. */
-  const steps = [];
-  for (let i = 1; i < loop.length; i++) {
-    steps.push(Math.hypot(loop[i][0] - loop[i - 1][0], loop[i][1] - loop[i - 1][1]));
-  }
-  const sortedSteps = [...steps].sort((a, b) => a - b);
-  const medianStep = sortedSteps[Math.floor(sortedSteps.length / 2)] || 1;
-  const gapRatio = Math.max(...steps) / medianStep;
+async function traceSessionCircuit(sessionKey, ttl) {
+  if (circuitTraceCache.has(sessionKey)) return circuitTraceCache.get(sessionKey);
 
-  /* Re-attach timestamps for the accepted loop (needed for sector split). */
-  const wanted = new Map();
-  loop.forEach(([x, y]) => wanted.set(`${x}|${y}`, (wanted.get(`${x}|${y}`) ?? 0) + 1));
-  const loopSamples = [];
-  for (const s of samples) {
-    const k = `${s.x}|${s.y}`;
-    const n = wanted.get(k);
-    if (n) { loopSamples.push(s); wanted.set(k, n - 1); }
-    if (loopSamples.length >= loop.length) break;
-  }
-  return { points: loop, samples: loopSamples, lap, gapRatio, medianStep };
+  const run = (async () => {
+    /* Window was 8–14, which made the map a coin toss: whether any driver
+       has clean GPS on a given lap is luck, and a 7-lap slice often holds
+       none. Measured at Hungary 2026 — driver #81 lap 7 closes at 26% of
+       the diagonal (unusable) while #44 lap 15 closes at 3% (perfect),
+       and BOTH sit outside 8–14, so the whole circuit fell back to the
+       illustrative layout despite a good lap existing. Laps 1–4 stay
+       excluded (standing start, opening-lap chaos) and the tail is capped
+       to keep candidates mid-race. */
+    const laps = await fetchJson(
+      `${OPENF1_BASE}/laps?session_key=${sessionKey}&lap_number>=5&lap_number<=30`,
+      { ttl, timeout: 20_000 }
+    );
+    const candidates = pickLapCandidates(laps);
+    if (!candidates.length) throw new Error("no clean reference lap");
+
+    /* Probe in batches rather than all at once. A usable lap is normally
+       in the first batch, so widening the candidate pool costs no extra
+       requests in the common case — the old code fetched all five every
+       time because Promise.all resolves before the early exit is reached.
+       Batch size matches OpenF1's 3 req/s so the limiter never queues. */
+    let best = null;
+    for (let i = 0; i < candidates.length; i += 3) {
+      const results = await Promise.all(
+        candidates.slice(i, i + 3).map((lap) => fetchLapSamples(sessionKey, lap, ttl).catch(() => null))
+      );
+      for (const r of results) {
+        if (!r) continue;
+        const err = closureError(r.samples.map((s) => [s.x, s.y]));
+        if (!best || err < best.err) best = { ...r, err };
+      }
+      if (best && best.err <= 0.08) break; // plenty good — stop paying
+    }
+    if (!best || best.err > 0.3) throw new Error("no lap traced a usable circuit");
+    return best;
+  })();
+
+  circuitTraceCache.set(sessionKey, run);
+  run.catch(() => circuitTraceCache.delete(sessionKey));
+  return run;
 }
 
 /**
@@ -774,32 +765,8 @@ export async function getTrackOutline() {
       const race = await jolpicaLatestRaceResults();
       const { sessionKey } = await resolveOpenF1Session(race);
 
-      /* Try several candidate laps: some laps contain GPS gaps and never
-         close a loop (measured: one lap closed at 26%, another at 3%).
-         The first candidate that yields a valid circuit wins. */
-      const laps = await fetchJson(
-        `${OPENF1_BASE}/laps?session_key=${sessionKey}&lap_number>=6&lap_number<=16`,
-        { ttl: TTL.sessions, timeout: 20_000 }
-      );
-      const candidates = pickLapCandidates(laps);
-      if (!candidates.length)
-        throw new Error(`no clean reference lap (got ${Array.isArray(laps) ? laps.length : 0} rows)`);
-
-      let traced = null, bestBroken = null;
-      for (const candidate of candidates) {
-        try {
-          const attempt = await traceOneLap(sessionKey, candidate, TTL.sessions);
-          if (!attempt) continue;
-          if (attempt.gapRatio <= 8) { traced = attempt; break; }   // continuous data
-          if (!bestBroken || attempt.gapRatio < bestBroken.gapRatio) bestBroken = attempt;
-        } catch {
-          /* next candidate */
-        }
-      }
-      if (!traced) traced = bestBroken;
-      if (!traced)
-        throw new Error(`no candidate lap produced a closed circuit (tried ${candidates.length})`);
-
+      /* Shared with the replay: computed once per session, not per caller. */
+      const traced = await traceSessionCircuit(sessionKey, TTL.sessions);
       const lap = traced.lap;
       const t0 = new Date(lap.date_start).getTime();
       const sorted = traced.samples;
@@ -809,10 +776,23 @@ export async function getTrackOutline() {
       const ys = sorted.map((p) => p.y);
       const minX = Math.min(...xs), maxX = Math.max(...xs);
       const minY = Math.min(...ys), maxY = Math.max(...ys);
-      const W = 660, H = 360, PAD = 30;
-      const scale = Math.min((W - 2 * PAD) / (maxX - minX || 1), (H - 2 * PAD) / (maxY - minY || 1));
-      const ox = (W - (maxX - minX) * scale) / 2;
-      const oy = (H - (maxY - minY) * scale) / 2;
+      /* Projection box is CROPPED TO THE CIRCUIT rather than a fixed
+         frame. A fixed viewBox (originally 660×360) has a fixed aspect
+         ratio, so any panel of a different shape letterboxes it and the
+         track renders small with dead space around it — and every circuit
+         has a different shape, so no single frame fits them all. Sizing
+         the box to the trace means preserveAspectRatio always scales the
+         circuit itself to fill the panel.
+         LONG is kept near the old usable span so stroke widths, which are
+         authored in viewBox units, stay visually correct. */
+      const spanX = (maxX - minX) || 1;
+      const spanY = (maxY - minY) || 1;
+      const PAD = 14;
+      const LONG = 620;
+      const scale = LONG / Math.max(spanX, spanY);
+      const W = Math.round(spanX * scale + PAD * 2);
+      const H = Math.round(spanY * scale + PAD * 2);
+      const ox = PAD, oy = PAD;
       const toSvg = (p) => [
         +(ox + (p.x - minX) * scale).toFixed(1),
         +(H - (oy + (p.y - minY) * scale)).toFixed(1), // flip: SVG y grows downward
@@ -826,7 +806,7 @@ export async function getTrackOutline() {
          car dots from SHARED bounds, so they can never drift apart. */
       const sectorsRaw = { s1: [], s2: [], s3: [] };
       sorted.forEach((p) => {
-        const t = p.t; // traceOneLap returns {t, x, y}
+        const t = p.t;
         const key = t <= b1 ? "s1" : t <= b2 ? "s2" : "s3";
         sectors[key].push(toSvg(p));
         sectorsRaw[key].push([p.x, p.y]);
@@ -1297,9 +1277,6 @@ export function buildTransform(minX, maxX, minY, maxY, view = { W: 660, H: 360, 
   };
 }
 
-/** Steps larger than this multiple of the median are dropouts, not travel. */
-export const TRACE_GAP_FACTOR = 8;
-
 /** Map OpenF1 world coordinates into the traced outline's SVG space. */
 export function projectToTrack(tf, x, y) {
   return [
@@ -1542,6 +1519,126 @@ export async function getTeamRadio() {
 }
 
 /* ================================================================
+ * RADIO & RACE CONTROL (telemetry dashboard)
+ * ----------------------------------------------------------------
+ * One chronological message feed merging two OpenF1 sources:
+ *   - /team_radio   → pit-wall AUDIO. There is no transcript in the
+ *     feed, so these rows carry an MP3 url and no text. Don't invent
+ *     message bodies for them.
+ *   - /race_control → the only source with real TEXT (flags, safety
+ *     car, penalties, track limits).
+ * Rows are discriminated by `kind` so the UI can render each honestly.
+ * ================================================================ */
+
+/** Coarse class for colour-coding a race control message. */
+function controlCategory(row) {
+  const msg = (row.message ?? "").toUpperCase();
+  const flag = (row.flag ?? "").toUpperCase();
+  if (flag === "RED") return "red";
+  /* Race control writes "VSC DEPLOYED", not "VIRTUAL SAFETY CAR" — matching
+     only the spelled-out form mislabelled every VSC message as generic. */
+  if (msg.includes("VIRTUAL SAFETY CAR") || /\bVSC\b/.test(msg)) return "vsc";
+  if (msg.includes("SAFETY CAR")) return "sc";
+  if (msg.includes("PENALTY") || msg.includes("INVESTIGAT")) return "penalty";
+  if (msg.includes("TRACK LIMITS")) return "limits";
+  if (flag === "YELLOW" || flag === "DOUBLE YELLOW") return "yellow";
+  if (flag === "GREEN" || flag === "CLEAR") return "green";
+  if ((row.category ?? "").toUpperCase() === "DRS") return "drs";
+  return "info";
+}
+
+/* Mock body: race control ONLY. A radio row without a playable clip is
+   dead weight, and fabricating driver quotes would be dishonest — so
+   demo mode shows the message rail with real-shaped control notices. */
+const MOCK_CONTROL = [
+  { lap: 1,  offset: 0,        category: "green",   message: "GREEN LIGHT — PIT EXIT OPEN" },
+  { lap: 1,  offset: 62_000,   category: "info",    message: "RACE START — TRACK CLEAR" },
+  { lap: 6,  offset: 470_000,  category: "yellow",  message: "YELLOW FLAG IN SECTOR 2" },
+  { lap: 7,  offset: 545_000,  category: "green",   message: "CLEAR IN SECTOR 2" },
+  { lap: 18, offset: 1_390_000, category: "limits", message: "CAR 27 TRACK LIMITS AT TURN 4 — LAP 18 DELETED" },
+  { lap: 24, offset: 1_860_000, category: "sc",     message: "SAFETY CAR DEPLOYED" },
+  { lap: 27, offset: 2_090_000, category: "info",   message: "SAFETY CAR IN THIS LAP" },
+  { lap: 31, offset: 2_400_000, category: "penalty", message: "CAR 18 — 5 SECOND TIME PENALTY — UNSAFE RELEASE" },
+  { lap: 52, offset: 4_020_000, category: "drs",    message: "DRS ENABLED" },
+  { lap: 78, offset: 6_010_000, category: "info",   message: "CHEQUERED FLAG" },
+];
+
+/**
+ * Merged radio + race control feed, oldest first.
+ * Radio rows: { kind:"radio", t, lap, code, name, color, url }
+ * Control rows: { kind:"control", t, lap, category, message, code, color }
+ */
+export async function getRadioMessages() {
+  return withFallback(
+    "radio",
+    async () => {
+      const { sessionKey } = await openF1Context();
+      /* lapAtBuilder rides on the already-cached all-laps fetch, and both
+         endpoints below are the same ones the replay uses — so this adds
+         two requests to the dashboard, not a new data dependency. */
+      const [radioRows, controlRows, drivers, lapAt] = await Promise.all([
+        fetchJson(`${OPENF1_BASE}/team_radio?session_key=${sessionKey}`, { ttl: TTL.results, timeout: 30_000 }).catch(() => []),
+        fetchJson(`${OPENF1_BASE}/race_control?session_key=${sessionKey}`, { ttl: TTL.results }).catch(() => []),
+        openF1Drivers(sessionKey),
+        lapAtBuilder(sessionKey),
+      ]);
+
+      const messages = [];
+
+      (Array.isArray(radioRows) ? radioRows : []).forEach((r) => {
+        if (!r.date || !r.recording_url) return;
+        const t = new Date(r.date).getTime();
+        const id = drivers[r.driver_number] ?? {};
+        messages.push({
+          kind: "radio",
+          t,
+          lap: lapAt(t),
+          code: id.code ?? String(r.driver_number),
+          name: id.name ?? `#${r.driver_number}`,
+          color: id.teamColor ?? "#8B95A7",
+          url: r.recording_url,
+        });
+      });
+
+      (Array.isArray(controlRows) ? controlRows : []).forEach((r) => {
+        if (!r.date || !r.message) return;
+        const t = new Date(r.date).getTime();
+        const id = r.driver_number ? drivers[r.driver_number] : null;
+        messages.push({
+          kind: "control",
+          t,
+          lap: r.lap_number ?? lapAt(t),
+          category: controlCategory(r),
+          message: r.message,
+          code: id?.code ?? null,
+          color: id?.teamColor ?? null,
+        });
+      });
+
+      /* Both sources empty means the session genuinely has nothing to show
+         OR both calls failed — either way don't render an empty rail as if
+         it were real. Fall back so the panel is honestly labelled. */
+      if (!messages.length) throw new Error("no radio or race control messages");
+
+      return messages.sort((a, b) => a.t - b.t);
+    },
+    async () => {
+      await simulateLatency();
+      const base = new Date("2026-05-24T13:00:00Z").getTime();
+      return MOCK_CONTROL.map(({ lap, offset, category, message }) => ({
+        kind: "control",
+        t: base + offset,
+        lap,
+        category,
+        message,
+        code: null,
+        color: null,
+      }));
+    }
+  );
+}
+
+/* ================================================================
  * HEAD-TO-HEAD COMPARISON
  * Per-driver race metrics for the whole classified field, plus each
  * driver's lap array so the client can compute pair duels and the
@@ -1686,28 +1783,11 @@ export async function getDriverComparison() {
  * Returns raw world coords: [[x, y], ...] for one clean lap.
  */
 export async function getSessionTrackTrace(sessionKey) {
-  const laps = await fetchJson(
-    `${OPENF1_BASE}/laps?session_key=${sessionKey}&lap_number>=6&lap_number<=16`,
-    { ttl: TTL.results, timeout: 20_000 }
-  );
-  const candidates = pickLapCandidates(laps);
-  if (!candidates.length) throw new Error("no clean lap for track trace");
-
-  /* Prefer a lap with NO dropouts (gapRatio ≤ 8× median step). Keep the
-     least-broken one as a fallback so we still draw something usable. */
-  let best = null;
-  for (const lap of candidates) {
-    try {
-      const traced = await traceOneLap(sessionKey, lap, TTL.results);
-      if (!traced) continue;
-      if (traced.gapRatio <= 8) {
-        return { points: traced.points, driver: lap.driver_number, lap: lap.lap_number, gapRatio: traced.gapRatio };
-      }
-      if (!best || traced.gapRatio < best.gapRatio) best = { ...traced, driver: lap.driver_number };
-    } catch {
-      /* try the next candidate */
-    }
-  }
-  if (best) return { points: best.points, driver: best.driver, lap: best.lap.lap_number, gapRatio: best.gapRatio };
-  throw new Error(`no candidate lap produced a closed circuit (tried ${candidates.length})`);
+  const best = await traceSessionCircuit(sessionKey, TTL.results);
+  return {
+    points: best.samples.map((s) => [s.x, s.y]),
+    driver: best.lap.driver_number,
+    lap: best.lap.lap_number,
+    closureError: best.err,
+  };
 }

@@ -1,4 +1,6 @@
+import { redirect } from "next/navigation";
 import LiveRacePage from "@/components/LiveRacePage";
+import { FEATURES } from "@/services/features";
 
 export const metadata = {
   title: "Live Race",
@@ -8,5 +10,10 @@ export const metadata = {
 };
 
 export default function LivePage() {
+  /* Replay shelved. The route stays mounted and redirects rather than 404s,
+     so old links and bookmarks land somewhere useful. LiveRacePage below is
+     still imported and type-checked — flip FEATURES.raceReplay to restore. */
+  if (!FEATURES.raceReplay) redirect("/telemetry");
+
   return <LiveRacePage />;
 }

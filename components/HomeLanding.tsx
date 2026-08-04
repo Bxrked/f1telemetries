@@ -2,8 +2,13 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { BarChart3, Radio, Swords, Timer, Trophy, ChevronRight } from "lucide-react";
+import { motion } from "framer-motion";
+import { BarChart3, Radio, Swords, Trophy, ArrowRight } from "lucide-react";
 import { getSeasonSchedule } from "@/services/f1Service";
+import { FEATURES } from "@/services/features";
+import { DUR, EASE, SPRING, PRESS, rowDelay } from "@/lib/motion";
+import CarHero from "./CarHero";
+import { useCinematic, ZOOM_OUT_KEY } from "./RouteCinematic";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
@@ -31,113 +36,164 @@ const SECTIONS = [
   {
     href: "/telemetry",
     icon: BarChart3,
-    title: "Post-Race Telemetry",
-    desc: "Sector analysis, tyre strategy, pit stops, degradation models, speed traps and championship standings for the latest Grand Prix — updated automatically after every race.",
-    cta: "Open dashboard",
+    title: "Telemetry",
+    desc: "Sectors, tyre strategy, pit stops, degradation, speed traps.",
+    part: "Power unit",
   },
   {
     href: "/live",
     icon: Radio,
     title: "Live Race",
-    desc: "Broadcast-style animated race map: every car as a labelled dot with a live running order and gaps. Currently replays the most recent race; true live coming.",
-    cta: "Enter broadcast mode",
-    live: true,
+    desc: "Broadcast race map with running order and gaps.",
+    part: "Sidepod",
   },
   {
     href: "/compare",
     icon: Swords,
-    title: "Head-to-Head",
-    desc: "Pick any two drivers from the latest race: best sectors, race pace, top speed, lap-by-lap duel, cumulative gap trace and pit strategies, side by side.",
-    cta: "Compare drivers",
+    title: "Head to Head",
+    desc: "Two drivers, lap by lap: pace, sectors, top speed, gap trace.",
+    part: "Cockpit",
   },
 ];
 
+/* Replay is shelved — hidden until FEATURES.raceReplay is flipped back on. */
+const VISIBLE_SECTIONS = SECTIONS.filter((s) => FEATURES.raceReplay || s.href !== "/live");
+
+const enter = {
+  hidden: { opacity: 0, y: 16 },
+  show: (i: number = 0) => ({
+    opacity: 1,
+    y: 0,
+    transition: { duration: DUR.layout, ease: EASE.out, delay: 0.4 + rowDelay(i) },
+  }),
+};
+
 export default function HomeLanding() {
+  const { play, zoom } = useCinematic();
   const [schedule, setSchedule] = useState<any>(null);
+  /* Set when we arrived from a section — the camera pulls back out of the
+     same bodywork we dived into. */
+  const [zoomOutFrom, setZoomOutFrom] = useState<string | null>(null);
+
+  useEffect(() => {
+    try {
+      const from = sessionStorage.getItem(ZOOM_OUT_KEY);
+      if (from) {
+        setZoomOutFrom(from);
+        sessionStorage.removeItem(ZOOM_OUT_KEY);
+      }
+    } catch {
+      /* private mode — the hero simply appears */
+    }
+  }, []);
+
   useEffect(() => {
     getSeasonSchedule().then(setSchedule).catch(() => {});
   }, []);
   const countdown = useCountdown(schedule?.nextRace?.date);
 
+  const chrome = { opacity: zoom ? 0 : 1 };
+  const chromeT = { duration: zoom ? 0.35 : 0.5, ease: zoom ? EASE.in : EASE.out };
+
   return (
-    <main className="mx-auto flex min-h-[calc(100vh-64px)] max-w-7xl flex-col items-center justify-center px-4 py-14 text-center sm:px-6 2xl:max-w-[1440px]">
-      {/* Hero */}
-      <p className="eyebrow mb-3 flex items-center justify-center gap-2">
-        <span className="inline-block h-2 w-2 animate-pulse-dot rounded-full bg-f1red-bright" />
-        {schedule ? `Season ${schedule.season}` : "Race analytics platform"}
-      </p>
-      <h1 className="font-display text-6xl font-black uppercase italic leading-[0.95] tracking-tight sm:text-7xl lg:text-8xl">
-        <span className="text-f1red-bright">F1</span> Telemetries
-      </h1>
-      <p className="timing mt-3 text-[11px] uppercase tracking-[0.3em] text-carbon-400">
-        f1telemetries.com
-      </p>
-      <p className="mx-auto mt-5 max-w-2xl text-sm text-carbon-300 sm:text-base">
-        Live-data race intelligence: telemetry, strategy and broadcast-style
-        replays for every Grand Prix — self-updating, race after race.
-      </p>
+    /* flex-1 + min-h-0: fills whatever the sticky nav leaves, at any
+       breakpoint. min-h-0 stops the flex item from being forced taller
+       than its share by the absolutely-positioned content inside. */
+    <main className="relative min-h-0 w-full flex-1 overflow-hidden">
+      {/* ── Fullscreen reveal. `fixed inset-0` so the footage covers the
+             entire viewport including behind the translucent nav, rather
+             than stopping at the nav's lower edge. The dive and pull-out
+             ride on this wrapper; the camera move is in the footage. ─── */}
+      <motion.div
+        className="fixed inset-0 z-0"
+        style={{ transformOrigin: zoom?.origin ?? zoomOutFrom ?? "50% 50%" }}
+        initial={zoomOutFrom ? { scale: 6, opacity: 0 } : { opacity: 0 }}
+        animate={zoom ? { scale: 6, opacity: 0 } : { scale: 1, opacity: 1 }}
+        transition={
+          zoom
+            ? { duration: 1.1, ease: EASE.in }
+            : zoomOutFrom
+              ? { duration: 1.0, ease: EASE.out }
+              : { duration: 0.6, ease: EASE.out }
+        }
+      >
+        <CarHero />
+      </motion.div>
 
-      {/* Next race / latest race strip */}
-      <div className="mt-8 flex flex-wrap justify-center gap-3">
-        {schedule?.nextRace && (
-          <div className="flex items-center gap-3 rounded-lg border border-f1red/40 bg-f1red/10 px-4 py-2.5">
-            <Timer size={14} className="text-f1red-bright" />
-            <span className="text-xs text-carbon-300">
-              Next · <span className="font-bold text-carbon-100">{schedule.nextRace.gp}</span>
-            </span>
-            <span className="timing text-sm font-bold tracking-wider text-f1red-bright">
-              {countdown ?? "—"}
-            </span>
-          </div>
-        )}
-        {schedule?.latest && (
-          <div className="flex items-center gap-3 rounded-lg border border-carbon-700 bg-carbon-850 px-4 py-2.5">
-            <Trophy size={14} className="text-sector-yellow" />
-            <span className="text-xs text-carbon-300">
-              Latest · <span className="font-bold text-carbon-100">{schedule.latest.gp}</span>
-              {schedule.latest.winner && (
-                <span className="timing ml-2 text-sector-yellow">🏆 {schedule.latest.winner}</span>
-              )}
-            </span>
-          </div>
-        )}
-      </div>
+      {/* Bottom scrim — keeps the options legible at moments where the
+          footage isn't black behind them. */}
+      <div className="pointer-events-none fixed inset-x-0 bottom-0 z-0 h-[38%] bg-gradient-to-t from-black via-black/85 to-transparent" />
 
-      {/* Section cards */}
-      <div className="mt-12 grid w-full gap-5 text-left sm:grid-cols-2 lg:grid-cols-3">
-        {SECTIONS.map(({ href, icon: Icon, title, desc, cta, live }) => (
-          <Link
-            key={href}
-            href={href}
-            className="group relative overflow-hidden rounded-xl border border-carbon-700 bg-carbon-850 p-7
-              shadow-panel transition-all duration-300 hover:-translate-y-0.5 hover:border-f1red/60 hover:shadow-red-glow"
-          >
-            <span className="absolute left-0 top-6 h-10 w-[3px] rounded-r bg-f1red opacity-60 transition-opacity group-hover:opacity-100" />
-            <div className="mb-4 flex items-center justify-between">
-              <span className="grid h-10 w-10 place-items-center rounded-lg bg-carbon-800 text-carbon-300 transition-colors group-hover:text-f1red-bright">
-                <Icon size={18} />
+      {/* ── Options, in the black band at the bottom ───────────────── */}
+      <motion.div
+        className="fixed inset-x-0 bottom-0 z-10 px-4 pb-5 sm:px-6 sm:pb-7"
+        animate={chrome}
+        transition={chromeT}
+      >
+        <div className="mx-auto grid w-full max-w-4xl gap-3 sm:grid-cols-2">
+          {VISIBLE_SECTIONS.map(({ href, icon: Icon, title, desc, part }, i) => (
+            <motion.div key={href} custom={i} variants={enter} initial="hidden" animate="show">
+              <motion.div whileHover={{ y: -3 }} whileTap={PRESS} transition={SPRING.press}>
+                <Link
+                  href={href}
+                  onClick={(e) => {
+                    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+                    e.preventDefault();
+                    play(href, title);
+                  }}
+                  className="group flex items-center gap-4 rounded-panel border border-carbon-700/80 bg-carbon-950/70 px-4 py-3.5 backdrop-blur-sm
+                    transition-colors duration-micro ease-out-expo hover:border-f1red/70 hover:bg-carbon-900/80"
+                >
+                  <span className="grid h-10 w-10 shrink-0 place-items-center rounded-row bg-carbon-850 text-carbon-300 transition-colors duration-micro group-hover:bg-f1red/20 group-hover:text-f1red-bright">
+                    <Icon size={17} />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-baseline gap-2">
+                      <span className="font-display text-lg font-bold uppercase tracking-wide text-carbon-100">
+                        {title}
+                      </span>
+                      <span className="timing text-micro uppercase tracking-wider text-carbon-500">
+                        {part}
+                      </span>
+                    </span>
+                    <span className="mt-0.5 block truncate text-data text-carbon-400">{desc}</span>
+                  </span>
+                  <ArrowRight
+                    size={17}
+                    className="shrink-0 text-carbon-600 transition-all duration-micro ease-out-expo
+                      group-hover:translate-x-1 group-hover:text-f1red-bright"
+                  />
+                </Link>
+              </motion.div>
+            </motion.div>
+          ))}
+        </div>
+
+        {/* Race status — one thin line under the options */}
+        <div className="mx-auto mt-3 flex max-w-4xl flex-wrap items-center justify-center gap-x-6 gap-y-1">
+          {schedule?.nextRace && (
+            <span className="flex items-baseline gap-2">
+              <span className="eyebrow">Next</span>
+              <span className="text-label font-bold text-carbon-100">{schedule.nextRace.gp}</span>
+              <span className="timing text-label font-bold tabular-nums text-f1red-bright">
+                {countdown ?? "—"}
               </span>
-              {live && (
-                <span className="timing flex items-center gap-1.5 rounded bg-f1red/15 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-f1red-bright">
-                  <span className="h-1.5 w-1.5 animate-pulse-dot rounded-full bg-f1red-bright" />
-                  Replay
+            </span>
+          )}
+          {schedule?.latest && (
+            <span className="flex items-baseline gap-2">
+              <span className="eyebrow">Latest</span>
+              <span className="text-label font-bold text-carbon-100">{schedule.latest.gp}</span>
+              {schedule.latest.winner && (
+                <span className="timing flex items-center gap-1 text-label font-bold text-sector-yellow">
+                  <Trophy size={11} />
+                  {schedule.latest.winner}
                 </span>
               )}
-            </div>
-            <h2 className="font-display text-xl font-bold uppercase tracking-wide">{title}</h2>
-            <p className="mt-2 text-xs leading-relaxed text-carbon-300">{desc}</p>
-            <p className="timing mt-4 flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider text-f1red-bright">
-              {cta} <ChevronRight size={13} className="transition-transform group-hover:translate-x-0.5" />
-            </p>
-          </Link>
-        ))}
-      </div>
-
-      <p className="mt-12 text-[10px] text-carbon-400">
-        f1telemetries.com · Data: Jolpica (results · standings · schedule) & OpenF1 (telemetry · GPS · weather)
-        <br />
-        Unofficial fan project — not affiliated with, endorsed by, or connected to Formula 1, the FIA, or any team.
-      </p>
+            </span>
+          )}
+        </div>
+      </motion.div>
     </main>
   );
 }
