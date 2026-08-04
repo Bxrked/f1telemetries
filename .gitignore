@@ -18,10 +18,6 @@ next-env.d.ts
 # Editor/agent config that can reference local secrets by name.
 .mcp.json
 
-# Third-party media kept OUT of this public repo: the car stills are
-# official Ferrari press renders (team shield + sponsor trademarks) and the
-# reveal clip is F1 broadcast footage. Fine to hold locally; publishing them
-# from a repo that states it is unaffiliated is a different matter.
-# NOTE: the landing hero reads /car-reveal.mp4, so any clone or CI deploy
-# needs these supplied separately (upload to the host, or a CDN URL).
-public/
+# public/ is intentionally committed. The hero media ships with the repo so
+# clones and CI builds work with no extra configuration — served as a static
+# asset from the same origin, which is faster than an external fetch.
