@@ -4,6 +4,7 @@ import {
   BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from "recharts";
 import ChartTooltip from "./ChartTooltip";
+import { GRID, TICK, TICK_CATEGORY, AXIS_LINE, CURSOR } from "@/lib/chartTheme";
 import { formatLapTime, formatSector } from "@/services/format";
 
 const SECTOR_HEX: Record<string, string> = {
@@ -39,12 +40,12 @@ export default function SectorChart({ data }: { data: any }) {
               <div className="h-52">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={rows} margin={{ top: 4, right: 4, left: -22, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#1E2430" vertical={false} />
+                    <CartesianGrid {...GRID} vertical={false} />
                     <XAxis
                       dataKey="code"
                       interval={0}
-                      tick={{ fill: "#8B95A7", fontSize: 9, fontFamily: "var(--font-timing)" }}
-                      axisLine={{ stroke: "#2A3242" }}
+                      tick={TICK_CATEGORY}
+                      axisLine={AXIS_LINE}
                       tickLine={false}
                     />
                     <YAxis
@@ -52,14 +53,14 @@ export default function SectorChart({ data }: { data: any }) {
                         (min: number) => +(min - 0.35).toFixed(2),
                         (max: number) => +(max + 0.2).toFixed(2),
                       ]}
-                      tick={{ fill: "#5B6678", fontSize: 9, fontFamily: "var(--font-timing)" }}
+                      tick={TICK}
                       axisLine={false}
                       tickLine={false}
                       tickFormatter={(v: number) => v.toFixed(1)}
                       width={44}
                     />
                     <Tooltip
-                      cursor={{ fill: "rgba(255,255,255,0.03)" }}
+                      cursor={CURSOR}
                       content={
                         <ChartTooltip
                           formatter={(entry: any) => ({

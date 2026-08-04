@@ -6,12 +6,45 @@ import {
 import { Gauge, TimerReset } from "lucide-react";
 import ChartTooltip from "./ChartTooltip";
 import { formatClock } from "@/services/format";
+import { GRID, TICK, TICK_CATEGORY, AXIS_LINE, CURSOR, BAR, SECTOR } from "@/lib/chartTheme";
+
+/** FIA session-best purple. */
+const SECTOR_PURPLE = "#B44CFF";
+
+/**
+ * Driver-code tick that turns FIA purple for the session best.
+ *
+ * Deliberately a TEXT tick rather than a stroke on the bar: recharts draws
+ * bar shapes through its animation pipeline, so a bar-level marker isn't
+ * present until that runs. The axis label is always in the DOM, so the
+ * "who was fastest" signal can never be lost to an animation not firing.
+ */
+function BestTick({ x, y, payload, bestCode }: any) {
+  const isBest = payload?.value === bestCode;
+  return (
+    <text
+      x={x}
+      y={y}
+      dy={3}
+      textAnchor="end"
+      fill={isBest ? SECTOR_PURPLE : TICK_CATEGORY.fill}
+      fontSize={TICK_CATEGORY.fontSize}
+      fontFamily={TICK_CATEGORY.fontFamily}
+      fontWeight={700}
+    >
+      {payload?.value}
+    </text>
+  );
+}
 
 const paceLabel = (s: number) => formatClock(s, 2);
 
 /** Vmax speed trap + average race pace, coloured by team livery. */
 export default function TelemetryCharts({ data }: { data: any }) {
   const { vmax, pace } = data;
+  /* Both arrays arrive pre-sorted best-first from the service. */
+  const bestVmax = vmax[0]?.code;
+  const bestPace = pace[0]?.code;
   const chartHeight = (n: number) => Math.max(288, n * 22 + 30);
 
   return (
@@ -24,19 +57,19 @@ export default function TelemetryCharts({ data }: { data: any }) {
         <div style={{ height: chartHeight(vmax.length) }}>
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={vmax} layout="vertical" margin={{ top: 0, right: 36, left: -6, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1E2430" horizontal={false} />
+              <CartesianGrid {...GRID} horizontal={false} />
               <XAxis
                 type="number" domain={["dataMin - 5", "dataMax + 3"]}
-                tick={{ fill: "#5B6678", fontSize: 10, fontFamily: "var(--font-timing)" }}
-                axisLine={{ stroke: "#2A3242" }} tickLine={false}
+                tick={TICK}
+                axisLine={AXIS_LINE} tickLine={false}
               />
               <YAxis
                 type="category" dataKey="code" width={42} interval={0}
-                tick={{ fill: "#8B95A7", fontSize: 9, fontFamily: "var(--font-timing)", fontWeight: 700 }}
+                tick={<BestTick bestCode={bestVmax} />}
                 axisLine={false} tickLine={false}
               />
               <Tooltip
-                cursor={{ fill: "rgba(255,255,255,0.03)" }}
+                cursor={CURSOR}
                 content={
                   <ChartTooltip
                     formatter={(e: any) => ({
@@ -47,9 +80,19 @@ export default function TelemetryCharts({ data }: { data: any }) {
                   />
                 }
               />
-              <Bar dataKey="vmax" radius={[0, 3, 3, 0]} maxBarSize={12}>
-                {vmax.map((d: any) => (
-                  <Cell key={d.code} fill={d.teamColor} fillOpacity={0.9} />
+              {/* Session best gets the FIA purple outline — the fastest
+                  trap of the race should be identifiable at a glance, not
+                  just "the longest bar". Team colour stays the fill so the
+                  livery reading is preserved. */}
+              <Bar dataKey="vmax" radius={BAR.radiusH} maxBarSize={BAR.maxSize} animationDuration={520} animationEasing="ease-out">
+                {vmax.map((d: any, i: number) => (
+                  <Cell
+                    key={d.code}
+                    fill={d.teamColor}
+                    fillOpacity={0.92}
+                    stroke={i === 0 ? SECTOR_PURPLE : undefined}
+                    strokeWidth={i === 0 ? 1.5 : 0}
+                  />
                 ))}
               </Bar>
             </BarChart>
@@ -65,20 +108,20 @@ export default function TelemetryCharts({ data }: { data: any }) {
         <div style={{ height: chartHeight(pace.length) }}>
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={pace} layout="vertical" margin={{ top: 0, right: 36, left: -6, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1E2430" horizontal={false} />
+              <CartesianGrid {...GRID} horizontal={false} />
               <XAxis
                 type="number" domain={["dataMin - 0.5", "dataMax + 0.5"]}
                 tickFormatter={(v) => paceLabel(v)}
-                tick={{ fill: "#5B6678", fontSize: 10, fontFamily: "var(--font-timing)" }}
-                axisLine={{ stroke: "#2A3242" }} tickLine={false}
+                tick={TICK}
+                axisLine={AXIS_LINE} tickLine={false}
               />
               <YAxis
                 type="category" dataKey="code" width={42} interval={0}
-                tick={{ fill: "#8B95A7", fontSize: 9, fontFamily: "var(--font-timing)", fontWeight: 700 }}
+                tick={<BestTick bestCode={bestPace} />}
                 axisLine={false} tickLine={false}
               />
               <Tooltip
-                cursor={{ fill: "rgba(255,255,255,0.03)" }}
+                cursor={CURSOR}
                 content={
                   <ChartTooltip
                     formatter={(e: any) => ({
@@ -89,9 +132,15 @@ export default function TelemetryCharts({ data }: { data: any }) {
                   />
                 }
               />
-              <Bar dataKey="avgPace" radius={[0, 3, 3, 0]} maxBarSize={12}>
-                {pace.map((d: any) => (
-                  <Cell key={d.code} fill={d.teamColor} fillOpacity={0.9} />
+              <Bar dataKey="avgPace" radius={BAR.radiusH} maxBarSize={BAR.maxSize} animationDuration={520} animationEasing="ease-out">
+                {pace.map((d: any, i: number) => (
+                  <Cell
+                    key={d.code}
+                    fill={d.teamColor}
+                    fillOpacity={0.92}
+                    stroke={i === 0 ? SECTOR_PURPLE : undefined}
+                    strokeWidth={i === 0 ? 1.5 : 0}
+                  />
                 ))}
               </Bar>
             </BarChart>

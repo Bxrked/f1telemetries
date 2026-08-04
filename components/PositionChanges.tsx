@@ -5,6 +5,7 @@ import {
   ReferenceLine, ResponsiveContainer, LabelList,
 } from "recharts";
 import ChartTooltip from "./ChartTooltip";
+import { GRID, TICK, TICK_CATEGORY, AXIS_LINE, CURSOR, BAR } from "@/lib/chartTheme";
 
 /**
  * Grid → flag delta. Horizontal diverging bars:
@@ -20,22 +21,24 @@ export default function PositionChanges({ data }: { data: any[] }) {
     <div style={{ height }}>
       <ResponsiveContainer width="100%" height="100%">
         <BarChart data={data} layout="vertical" margin={{ top: 0, right: 26, left: -8, bottom: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#1E2430" horizontal={false} />
+          <CartesianGrid {...GRID} horizontal={false} />
           <XAxis
             type="number"
             domain={["dataMin - 1", "dataMax + 1"]}
             allowDecimals={false}
-            tick={{ fill: "#5B6678", fontSize: 10, fontFamily: "var(--font-timing)" }}
-            axisLine={{ stroke: "#2A3242" }} tickLine={false}
+            tick={TICK}
+            axisLine={AXIS_LINE} tickLine={false}
           />
           <YAxis
             type="category" dataKey="code" width={44}
-            tick={{ fill: "#8B95A7", fontSize: 11, fontFamily: "var(--font-timing)", fontWeight: 700 }}
+            tick={TICK_CATEGORY}
             axisLine={false} tickLine={false}
           />
-          <ReferenceLine x={0} stroke="#2A3242" strokeWidth={1.5} />
+          {/* The zero line is the reference the whole chart is read against
+              — brighter than the grid on purpose. */}
+          <ReferenceLine x={0} stroke="#3A4356" strokeWidth={1.5} />
           <Tooltip
-            cursor={{ fill: "rgba(255,255,255,0.03)" }}
+            cursor={CURSOR}
             content={
               <ChartTooltip
                 formatter={(e: any) => ({
@@ -46,15 +49,15 @@ export default function PositionChanges({ data }: { data: any[] }) {
               />
             }
           />
-          <Bar dataKey="delta" radius={3} maxBarSize={14}>
+          <Bar dataKey="delta" radius={2} maxBarSize={BAR.maxSize} animationDuration={520} animationEasing="ease-out">
             {data.map((d) => (
-              <Cell key={d.code} fill={barColor(d.delta)} fillOpacity={0.9} />
+              <Cell key={d.code} fill={barColor(d.delta)} fillOpacity={0.92} />
             ))}
             <LabelList
               dataKey="delta"
               position="right"
               formatter={(v: number) => (v > 0 ? `+${v}` : v === 0 ? "—" : `${v}`)}
-              style={{ fill: "#8B95A7", fontSize: 10, fontFamily: "var(--font-timing)" }}
+              style={{ ...TICK, fill: "#8B95A7" }}
             />
           </Bar>
         </BarChart>

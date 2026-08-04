@@ -7,3 +7,21 @@ build/
 .DS_Store
 *.tsbuildinfo
 next-env.d.ts
+
+# Local agent tooling — NOT application code.
+# .claude/ holds 149 files from a third-party npm package, including 33
+# executable Python/CJS scripts that no one here has audited. Committing
+# them to a public repo would ship unreviewed executables to anyone who
+# clones it, and they are trivially reinstallable from the source package.
+.claude/
+
+# Editor/agent config that can reference local secrets by name.
+.mcp.json
+
+# Third-party media kept OUT of this public repo: the car stills are
+# official Ferrari press renders (team shield + sponsor trademarks) and the
+# reveal clip is F1 broadcast footage. Fine to hold locally; publishing them
+# from a repo that states it is unaffiliated is a different matter.
+# NOTE: the landing hero reads /car-reveal.mp4, so any clone or CI deploy
+# needs these supplied separately (upload to the host, or a CDN URL).
+public/

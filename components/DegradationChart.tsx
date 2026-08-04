@@ -5,6 +5,7 @@ import {
   Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
 import ChartTooltip from "./ChartTooltip";
+import { GRID, TICK, TICK_CATEGORY, AXIS_LINE, CURSOR, BAR } from "@/lib/chartTheme";
 import { formatLapTime } from "@/services/format";
 
 const COMPOUND_HEX: Record<string, string> = {
@@ -26,16 +27,16 @@ export default function DegradationChart({ data }: { data: any }) {
       <div className="h-56">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={series} margin={{ top: 4, right: 8, left: -14, bottom: 0 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#1E2430" />
+            <CartesianGrid {...GRID} />
             <XAxis
               dataKey="lap"
-              tick={{ fill: "#5B6678", fontSize: 10, fontFamily: "var(--font-timing)" }}
-              axisLine={{ stroke: "#2A3242" }} tickLine={false}
-              label={{ value: "Stint lap", fill: "#5B6678", fontSize: 10, dy: 12 }}
+              tick={TICK}
+              axisLine={AXIS_LINE} tickLine={false}
+              label={{ value: "Stint lap", fill: "#5B6678", fontSize: 9.5, dy: 12 }}
             />
             <YAxis
               domain={["dataMin - 0.3", "dataMax + 0.3"]}
-              tick={{ fill: "#5B6678", fontSize: 9, fontFamily: "var(--font-timing)" }}
+              tick={TICK}
               axisLine={false} tickLine={false} width={46}
               tickFormatter={(v: number) => (v >= 60 ? formatLapTime(v, 1) : v.toFixed(1))}
             />
@@ -68,19 +69,19 @@ export default function DegradationChart({ data }: { data: any }) {
         <div className="h-48">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={slopes} margin={{ top: 4, right: 4, left: -22, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1E2430" vertical={false} />
+              <CartesianGrid {...GRID} vertical={false} />
               <XAxis
                 dataKey="compound"
-                tick={{ fill: "#8B95A7", fontSize: 9, fontFamily: "var(--font-timing)" }}
-                axisLine={{ stroke: "#2A3242" }} tickLine={false}
+                tick={TICK_CATEGORY}
+                axisLine={AXIS_LINE} tickLine={false}
                 tickFormatter={(v) => v.slice(0, 3)}
               />
               <YAxis
-                tick={{ fill: "#5B6678", fontSize: 9, fontFamily: "var(--font-timing)" }}
+                tick={TICK}
                 axisLine={false} tickLine={false}
               />
               <Tooltip
-                cursor={{ fill: "rgba(255,255,255,0.03)" }}
+                cursor={CURSOR}
                 content={
                   <ChartTooltip
                     formatter={(e: any) => ({

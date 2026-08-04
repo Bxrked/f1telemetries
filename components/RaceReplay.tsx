@@ -1,12 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Play, Pause, RotateCcw, Loader2, AlertTriangle, Swords, Flag, Radio as RadioIcon, ListOrdered } from "lucide-react";
-import { getReplayContext, getReplayWindow, projectToTrack, buildTransform, getReplayEvents, getTeamRadio, getSessionTrackTrace } from "@/services/f1Service";
+import { getReplayContext, getReplayWindow, projectToTrack, getReplayEvents, getTeamRadio } from "@/services/f1Service";
 import { clearApiCache } from "@/services/apiClient";
-import { tracePath } from "@/services/format";
 
-const WINDOW_MS = 60_000; // 1-minute chunks: ~5k rows each → fast individual loads
+const WINDOW_MS = 45_000; // 45s chunks: smaller first paint, still few requests
 const SPEEDS = [1, 5, 15, 30, 60];
 
 const toPath = (pts: number[][]) =>
@@ -46,7 +45,6 @@ export default function RaceReplay({ outline }: { outline: any }) {
   /* Holds the shared projection transform; dotFor() is declared before the
      transform is computed, but only *called* during render after it. */
   const tfRef = useRef<any>(null);
-  const [trace, setTrace] = useState<any>(null);
 
   const t0 = ctx ? new Date(ctx.dateStart).getTime() : 0; // window-grid origin
   const tEnd = ctx ? ctx.raceEnd : 0;
@@ -75,9 +73,6 @@ export default function RaceReplay({ outline }: { outline: any }) {
     if (!ctx) return;
     getReplayEvents().then(setEvents).catch(() => setEvents([]));
     getTeamRadio().then(setRadio).catch(() => setRadio([]));
-    /* Trace the circuit from THIS session's own stream — same coordinate
-       frame as the car dots, so they can't diverge. */
-    getSessionTrackTrace(ctx.sessionKey).then(setTrace).catch(() => setTrace(null));
   }, [ctx]);
 
   const jumpTo = useCallback((t: number) => {
@@ -122,7 +117,11 @@ export default function RaceReplay({ outline }: { outline: any }) {
   useEffect(() => {
     if (!ctx || simTime == null) return;
     const ws = windowStartFor(simTime);
-    const depth = speed >= 30 ? 4 : 2;
+    /* Keep ~8 seconds of real-time lookahead buffered. At 1x that's one
+       chunk; at 60x it's several — which is what stops the stutter when
+       fast-forwarding or seeking. */
+    const LOOKAHEAD_SECONDS = 8;
+    const depth = Math.min(5, Math.max(1, Math.ceil((speed * LOOKAHEAD_SECONDS) / (WINDOW_MS / 1000))));
     for (let i = 0; i <= depth; i++) ensureWindow(ws + i * WINDOW_MS);
     for (const key of Array.from(buffers.current.keys())) {
       if (key < ws - WINDOW_MS || key > ws + (depth + 1) * WINDOW_MS) buffers.current.delete(key);
@@ -148,7 +147,8 @@ export default function RaceReplay({ outline }: { outline: any }) {
       last = now;
       setSimTime((t) => {
         const cur = t ?? lightsOut;
-        if (!buffers.current.has(windowStartFor(cur))) return cur; // hold: don't outrun data
+        // Hold the clock while the chunk covering `cur` is still loading.
+        if (!buffers.current.has(windowStartFor(cur))) return cur;
         const next = Math.min(cur + dt * speed, tEnd);
         if (next >= tEnd) setPlaying(false);
         return next;
@@ -204,26 +204,53 @@ export default function RaceReplay({ outline }: { outline: any }) {
     return () => clearInterval(id);
   }, [ctx, playing, simTime == null ? null : Math.floor(simTime / 500)]); // eslint-disable-line
 
-  /* ---- Dot positions ---- */
+  /* ---- Dot positions ----
+     Runs for every driver on every animation frame, so it must stay cheap:
+     binary search instead of a linear scan, and no array spreading. */
   const dotFor = (num: number): number[] | null => {
     if (simTime == null || !tfRef.current) return null;
     const ws = windowStartFor(simTime);
-    const samples = [
-      ...(buffers.current.get(ws - WINDOW_MS)?.locations?.[num] ?? []),
-      ...(buffers.current.get(ws)?.locations?.[num] ?? []),
-    ];
-    if (!samples.length) return null;
-    let i = samples.length - 1;
-    while (i > 0 && samples[i].t > simTime) i--;
-    const a = samples[i];
-    const b = samples[Math.min(i + 1, samples.length - 1)];
+    /* Only use the window that actually contains simTime (or the one just
+       before it). After a seek, older buffers must not paint stale dots. */
+    const cur = buffers.current.get(ws)?.locations?.[num];
+    const prev = buffers.current.get(ws - WINDOW_MS)?.locations?.[num];
+    const samples = cur?.length ? cur : prev;
+    if (!samples?.length) return null;
+
+    let lo = 0, hi = samples.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (samples[mid].t <= simTime) lo = mid; else hi = mid - 1;
+    }
+    const a = samples[lo];
+    const b = samples[Math.min(lo + 1, samples.length - 1)];
     if (simTime - a.t > 15_000) return null;
     const f = b.t === a.t ? 0 : Math.min(1, Math.max(0, (simTime - a.t) / (b.t - a.t)));
     return projectToTrack(tfRef.current, a.x + (b.x - a.x) * f, a.y + (b.y - a.y) * f);
   };
 
+  /* ---- Geometry ----
+     The outline now comes from a lap chosen by closure score, so its own
+     transform is trustworthy — the union-bounds machinery I added to work
+     around bad traces is gone. Memoised only so the path isn't rebuilt on
+     every animation frame. */
+  const tf = outline?.transform ?? null;
+  tfRef.current = tf;
+
+  const fullPath = useMemo(
+    () =>
+      outline?.sectors
+        ? toPath([
+            ...outline.sectors.s1,
+            ...outline.sectors.s2.slice(1),
+            ...outline.sectors.s3.slice(1),
+          ])
+        : "",
+    [outline]
+  );
+
   /* ---- Render states ---- */
-  if (!outline?.transform && !trace) {
+  if (!outline?.transform) {
     return (
       <p className="flex items-center gap-2 rounded-lg border border-carbon-700 bg-carbon-900/60 px-4 py-3 text-xs text-carbon-400">
         <AlertTriangle size={13} className="text-sector-yellow" />
@@ -276,50 +303,6 @@ export default function RaceReplay({ outline }: { outline: any }) {
      order — leaders and drivers in a highlighted overtake win priority,
      and a label is dropped if another label already sits within
      LABEL_MIN_DIST of it. The dot itself is always drawn. */
-  /* ---- Shared coordinate space ----
-     The outline transform came from ONE reference lap, so any car sitting
-     outside that lap's bounding box (grid slots, pit lane, run-off) used
-     to project outside the drawn circuit. We instead derive bounds from
-     the union of the outline's raw points and the buffered replay points,
-     then project BOTH the track path and the dots with it — so they are
-     always in the same space by construction. */
-  const view = outline?.viewBox ?? { W: 660, H: 360, PAD: 30 };
-  const rawOutline: number[][] = trace?.points?.length
-    ? trace.points
-    : outline?.sectorsRaw
-    ? [...outline.sectorsRaw.s1, ...outline.sectorsRaw.s2, ...outline.sectorsRaw.s3]
-    : [];
-
-  const bounds = (() => {
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    const eat = (x: number, y: number) => {
-      if (!isFinite(x) || !isFinite(y)) return;
-      if (x < minX) minX = x; if (x > maxX) maxX = x;
-      if (y < minY) minY = y; if (y > maxY) maxY = y;
-    };
-    rawOutline.forEach(([x, y]) => eat(x, y));
-    const outlineSpanX = maxX - minX, outlineSpanY = maxY - minY;
-    // Fold in buffered car positions, ignoring absurd outliers (bad GPS).
-    buffers.current.forEach((w: any) => {
-      Object.values(w.locations ?? {}).forEach((arr: any) => {
-        arr.forEach((s: any) => {
-          if (!outlineSpanX || !outlineSpanY) return eat(s.x, s.y);
-          const okX = s.x > minX - outlineSpanX && s.x < maxX + outlineSpanX;
-          const okY = s.y > minY - outlineSpanY && s.y < maxY + outlineSpanY;
-          if (okX && okY) eat(s.x, s.y);
-        });
-      });
-    });
-    return { minX, maxX, minY, maxY, valid: isFinite(minX) && maxX > minX };
-  })();
-
-  const tf = bounds.valid
-    ? buildTransform(bounds.minX, bounds.maxX, bounds.minY, bounds.maxY, view)
-    : outline?.transform;
-
-  tfRef.current = tf;
-  const project = (x: number, y: number) => projectToTrack(tf, x, y);
-
   const LABEL_MIN_DIST = 22;
   const orderOf: Record<string, number> = {};
   standings.forEach((r: any) => (orderOf[r.code] = r.pos));
@@ -349,9 +332,7 @@ export default function RaceReplay({ outline }: { outline: any }) {
   });
   /* Draw the circuit from raw coords with the shared transform (falls back
      to the pre-projected path if raw points aren't available). */
-  const fullPath = rawOutline.length
-    ? tracePath(rawOutline.map(([x, y]: number[]) => project(x, y).map((n) => +n.toFixed(1))))
-    : "";
+
 
   return (
     <div className="grid gap-4 lg:grid-cols-[1fr_240px]">
