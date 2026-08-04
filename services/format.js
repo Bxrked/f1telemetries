@@ -29,24 +29,12 @@ export function formatSector(seconds, decimals = 3) {
 }
 
 /**
- * Build an SVG path from traced points, breaking the line at dropouts.
- * A GPS hole leaves two valid points far apart; connecting them draws a
- * straight line across the circuit that isn't part of the track. Starting
- * a new subpath (M instead of L) leaves an honest gap instead.
+ * Plain continuous polyline through traced points.
+ * Earlier versions tried to "break" the line at suspected GPS dropouts,
+ * but distance-per-sample scales with speed, so every straight got cut
+ * out of the map. Lap selection now handles bad data; drawing stays dumb.
  */
-export function tracePath(points, gapFactor = 8) {
+export function tracePath(points) {
   if (!points || points.length < 2) return "";
-  const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
-  const steps = [];
-  for (let i = 1; i < points.length; i++) steps.push(dist(points[i], points[i - 1]));
-  const sorted = [...steps].sort((a, b) => a - b);
-  const median = sorted[Math.floor(sorted.length / 2)] || 1;
-  const limit = median * gapFactor;
-
-  let d = `M ${points[0][0]} ${points[0][1]}`;
-  for (let i = 1; i < points.length; i++) {
-    const jump = dist(points[i], points[i - 1]) > limit;
-    d += `${jump ? " M " : " L "}${points[i][0]} ${points[i][1]}`;
-  }
-  return d;
+  return `M ${points.map((p) => p.join(" ")).join(" L ")}`;
 }

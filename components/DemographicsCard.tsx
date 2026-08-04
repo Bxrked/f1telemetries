@@ -5,6 +5,7 @@ import {
 } from "recharts";
 import { Users } from "lucide-react";
 import ChartTooltip from "./ChartTooltip";
+import { GRID, TICK, TICK_CATEGORY, AXIS_LINE, CURSOR, BAR, NEUTRAL } from "@/lib/chartTheme";
 
 /** Field demographics: age histogram + per-team average ages. */
 export default function DemographicsCard({ data }: { data: any }) {
@@ -31,30 +32,26 @@ export default function DemographicsCard({ data }: { data: any }) {
       <div className="h-40">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={distribution} margin={{ top: 4, right: 4, left: -26, bottom: 0 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#1E2430" vertical={false} />
-            <XAxis
-              dataKey="bin"
-              tick={{ fill: "#8B95A7", fontSize: 10, fontFamily: "var(--font-timing)" }}
-              axisLine={{ stroke: "#2A3242" }} tickLine={false}
-            />
-            <YAxis
-              allowDecimals={false}
-              tick={{ fill: "#5B6678", fontSize: 10, fontFamily: "var(--font-timing)" }}
-              axisLine={false} tickLine={false}
-            />
+            <CartesianGrid {...GRID} vertical={false} />
+            <XAxis dataKey="bin" tick={TICK_CATEGORY} axisLine={AXIS_LINE} tickLine={false} />
+            <YAxis allowDecimals={false} tick={TICK} axisLine={false} tickLine={false} />
             <Tooltip
-              cursor={{ fill: "rgba(255,255,255,0.03)" }}
+              cursor={CURSOR}
               content={
                 <ChartTooltip
                   formatter={(e: any) => ({
                     label: `${e.payload.bin} yrs`,
                     value: `${e.value} drivers`,
-                    color: "#E10600",
+                    color: NEUTRAL,
                   })}
                 />
               }
             />
-            <Bar dataKey="count" fill="#E10600" fillOpacity={0.85} radius={[3, 3, 0, 0]} maxBarSize={34} />
+            {/* Neutral bars: age bins carry no team or status meaning, so
+                painting them the brand red spends the accent on nothing and
+                competes with the team colours below. Grey reads as "just a
+                count"; the accent stays reserved for things that matter. */}
+            <Bar dataKey="count" fill={NEUTRAL} fillOpacity={0.9} radius={BAR.radiusV} maxBarSize={30} animationDuration={520} animationEasing="ease-out" />
           </BarChart>
         </ResponsiveContainer>
       </div>

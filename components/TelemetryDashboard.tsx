@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { GitCompareArrows, Timer, CircleDashed, Wrench, TrendingDown, Users, Gauge, Map, CalendarRange, Trophy, Route } from "lucide-react";
+import { GitCompareArrows, Timer, CircleDashed, Wrench, TrendingDown, Users, Gauge, Map, CalendarRange, Trophy, Route, RadioTower } from "lucide-react";
 
 import {
   getSessionInfo,
@@ -17,6 +17,7 @@ import {
   getFeedStatus,
   getTrackOutline,
   getPositionWorm,
+  getRadioMessages,
 } from "@/services/f1Service";
 
 import DashboardHeader from "./DashboardHeader";
@@ -33,6 +34,7 @@ import TelemetryCharts from "./TelemetryCharts";
 import ScheduleStrip from "./ScheduleStrip";
 import StandingsPanel from "./StandingsPanel";
 import PositionWormChart from "./PositionWormChart";
+import RadioMessages from "./RadioMessages";
 import MockDataBanner from "./MockDataBanner";
 
 interface DashboardData {
@@ -48,19 +50,22 @@ interface DashboardData {
   standings: any;
   trackOutline: any;
   worm: any;
+  radio: any[];
   feed: any;
 }
 
 function Skeleton() {
   return (
-    <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 2xl:max-w-[1440px]">
-      <div className="mb-6 h-20 animate-pulse rounded-xl bg-carbon-850" />
-      <div className="grid gap-4 lg:grid-cols-3">
-        <div className="h-[420px] animate-pulse rounded-xl bg-carbon-850 lg:col-span-2" />
-        <div className="h-[420px] animate-pulse rounded-xl bg-carbon-850" />
+    <div className="w-full min-w-0 px-4 py-6 sm:px-6">
+      <div className="skeleton mb-2 h-14" />
+      <div className="grid gap-2 xl:grid-cols-[0.8fr_2fr_0.8fr]">
+        <div className="skeleton h-[60vh]" />
+        <div className="skeleton h-[60vh]" />
+        <div className="skeleton h-[60vh]" />
       </div>
-      <p className="timing mt-6 text-center text-xs text-carbon-400">
-        Synchronising timing feed…
+      <p className="timing mt-4 flex items-center justify-center gap-2 text-micro uppercase tracking-[0.22em] text-carbon-500">
+        <span className="h-1.5 w-1.5 animate-pulse-dot rounded-full bg-f1red-bright" />
+        Synchronising timing feed
       </p>
     </div>
   );
@@ -70,10 +75,10 @@ type FeedData = { [K in keyof DashboardData]?: DashboardData[K] };
 
 function PanelLoading({ h = 200 }: { h?: number }) {
   return (
-    <div className="flex items-center justify-center rounded-lg bg-carbon-900/40" style={{ height: h }}>
-      <span className="timing flex items-center gap-2 text-xs text-carbon-400">
-        <span className="h-3 w-3 animate-spin rounded-full border-2 border-carbon-600 border-t-f1red" />
-        loading…
+    <div className="skeleton flex items-center justify-center" style={{ height: h }}>
+      <span className="timing relative z-10 flex items-center gap-2 text-micro uppercase tracking-wider text-carbon-500">
+        <span className="h-1.5 w-1.5 animate-pulse-dot rounded-full bg-f1red-bright" />
+        acquiring feed
       </span>
     </div>
   );
@@ -111,6 +116,7 @@ export default function TelemetryDashboard() {
     run("performance", getPerformanceMetrics());
     run("degradation", getDegradation());
     run("worm", getPositionWorm());
+    run("radio", getRadioMessages());
 
     return () => { cancelled = true; };
   }, []);
@@ -120,12 +126,18 @@ export default function TelemetryDashboard() {
   const data = { ...d, feed } as DashboardData & { feed: any };
 
   return (
-    <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 2xl:max-w-[1440px]">
+    /* Full-bleed: a 1440px cap left ~225px of dead black down each side on
+       a wide monitor. A dense telemetry board should use the glass.
+       min-w-0: body is a flex column, and flex items won't shrink below
+       their content's min-content width by default — a horizontally
+       scrollable child (the schedule strip) otherwise forces this main
+       wider than the viewport. */
+    <main className="w-full min-w-0 px-4 py-6 sm:px-6">
       <DashboardHeader session={data.session} feed={data.feed} />
 
       <MockDataBanner
         feed={data.feed}
-        only={["schedule","session","standings","positions","demographics","stints","pits","degradation","performance","sectors","worm","trackOutline"]}
+        only={["schedule","session","standings","positions","demographics","stints","pits","degradation","performance","sectors","worm","trackOutline","radio"]}
       />
 
       {/* ── Season calendar + next-race countdown ────────────────── */}
@@ -140,13 +152,36 @@ export default function TelemetryDashboard() {
         </Panel>
       </div>
 
-      {/* ── A. Hero: track map + key metrics ─────────────────────── */}
-      <div className="grid gap-4 lg:grid-cols-3">
+      {/* ── A. Hero band: metrics · circuit · pit wall ─────────────
+             Tall enough for the map to dominate, capped so the panels
+             below still peek above the fold and the page reads as a
+             dashboard rather than a single screen. Stacks under xl. ── */}
+      {/* Explicit fractions rather than 12-col spans: the radio rail needed
+          halving, which isn't expressible in twelfths. The map is
+          HEIGHT-constrained (circuits are usually portrait), so its column
+          only needs enough width to stop clipping — height is what makes
+          the track bigger, hence 92vh. Surplus width goes to the metrics
+          column, which can use it; the map would just gain dead space.
+          Side columns share one fraction so the board is symmetric —
+          metrics and pit wall frame the circuit at equal width. */}
+      <div className="grid gap-2 xl:h-[92vh] xl:grid-cols-[0.8fr_2fr_0.8fr]">
+        <Panel
+          eyebrow="Session"
+          title="Key Metrics"
+          feed={data.feed.detail?.session}
+          fill
+          action={<Timer size={16} className="mt-1 text-carbon-400" />}
+        >
+          <div className="h-full overflow-y-auto">
+            <StatStrip session={data.session} />
+          </div>
+        </Panel>
+
         <Panel
           eyebrow="Circuit overview"
           title={data.session.circuitName}
           feed={data.feed.detail?.trackOutline}
-          className="lg:col-span-2"
+          fill
           action={<Map size={16} className="mt-1 text-carbon-400" />}
         >
           {"trackOutline" in d ? (
@@ -155,14 +190,20 @@ export default function TelemetryDashboard() {
             <PanelLoading h={380} />
           )}
         </Panel>
-        <Panel eyebrow="Session" title="Key Metrics"
-          feed={data.feed.detail?.session} action={<Timer size={16} className="mt-1 text-carbon-400" />}>
-          <StatStrip session={data.session} />
+
+        <Panel
+          eyebrow="Pit wall"
+          title="Radio & Race Control"
+          feed={data.feed.detail?.radio}
+          fill
+          action={<RadioTower size={16} className="mt-1 text-carbon-400" />}
+        >
+          {"radio" in d ? <RadioMessages messages={data.radio} /> : <PanelLoading h={280} />}
         </Panel>
       </div>
 
       {/* ── B + D. Sector analysis & position changes ────────────── */}
-      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+      <div className="mt-2 grid gap-2 lg:grid-cols-2">
         <Panel
           eyebrow="Timing analysis"
           title="Sector Performance"
@@ -189,12 +230,14 @@ export default function TelemetryDashboard() {
           feed={data.feed.detail?.worm}
           action={<Route size={16} className="mt-1 text-carbon-400" />}
         >
-          {data.worm ? <PositionWormChart data={data.worm} /> : <PanelLoading h={420} />}
+          {/* Radio feed doubles as the race-control source for the safety
+              car bands — no extra request. */}
+          {data.worm ? <PositionWormChart data={data.worm} messages={data.radio} /> : <PanelLoading h={420} />}
         </Panel>
       </div>
 
       {/* ── C. Tyres & pit stops ─────────────────────────────────── */}
-      <div className="mt-4 grid gap-4 xl:grid-cols-5">
+      <div className="mt-2 grid gap-2 xl:grid-cols-5">
         <Panel
           eyebrow="Strategy"
           title="Tyre Stint Timeline"
@@ -215,7 +258,7 @@ export default function TelemetryDashboard() {
         </Panel>
       </div>
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-3">
+      <div className="mt-2 grid gap-2 lg:grid-cols-3">
         <Panel
           eyebrow="Tyre model"
           title="Degradation Over Stint"
@@ -238,7 +281,7 @@ export default function TelemetryDashboard() {
       </div>
 
       {/* ── E. Advanced telemetry + championship standings ───────── */}
-      <div className="mt-4 grid gap-4 lg:grid-cols-3">
+      <div className="mt-2 grid gap-2 lg:grid-cols-3">
         <Panel
           eyebrow="Advanced metrics"
           title="Speed Traps & Racing Pace"
