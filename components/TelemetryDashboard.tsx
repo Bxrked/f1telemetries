@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { GitCompareArrows, Timer, CircleDashed, Wrench, TrendingDown, Users, Gauge, Map, CalendarRange, Trophy, Route, RadioTower } from "lucide-react";
 
 import {
   getSessionInfo,
@@ -17,7 +16,7 @@ import {
   getFeedStatus,
   getTrackOutline,
   getPositionWorm,
-  getRadioMessages,
+  getRaceControl,
 } from "@/services/f1Service";
 
 import DashboardHeader from "./DashboardHeader";
@@ -34,7 +33,7 @@ import TelemetryCharts from "./TelemetryCharts";
 import ScheduleStrip from "./ScheduleStrip";
 import StandingsPanel from "./StandingsPanel";
 import PositionWormChart from "./PositionWormChart";
-import RadioMessages from "./RadioMessages";
+import RaceControlFeed from "./RaceControlFeed";
 import MockDataBanner from "./MockDataBanner";
 
 interface DashboardData {
@@ -50,7 +49,7 @@ interface DashboardData {
   standings: any;
   trackOutline: any;
   worm: any;
-  radio: any[];
+  control: any[];
   feed: any;
 }
 
@@ -116,7 +115,7 @@ export default function TelemetryDashboard() {
     run("performance", getPerformanceMetrics());
     run("degradation", getDegradation());
     run("worm", getPositionWorm());
-    run("radio", getRadioMessages());
+    run("control", getRaceControl());
 
     return () => { cancelled = true; };
   }, []);
@@ -133,11 +132,18 @@ export default function TelemetryDashboard() {
        scrollable child (the schedule strip) otherwise forces this main
        wider than the viewport. */
     <main className="w-full min-w-0 px-4 py-6 sm:px-6">
-      <DashboardHeader session={data.session} feed={data.feed} />
+      <DashboardHeader
+        session={data.session}
+        feed={data.feed}
+        /* Classified finishers only — a DNF's "position" isn't a podium. */
+        podium={data.positions
+          ?.filter((p: any) => !p.dnf && p.finish >= 1 && p.finish <= 3)
+          .sort((a: any, b: any) => a.finish - b.finish)}
+      />
 
       <MockDataBanner
         feed={data.feed}
-        only={["schedule","session","standings","positions","demographics","stints","pits","degradation","performance","sectors","worm","trackOutline","radio"]}
+        only={["schedule","session","standings","positions","demographics","stints","pits","degradation","performance","sectors","worm","trackOutline","control"]}
       />
 
       {/* ── Season calendar + next-race countdown ────────────────── */}
@@ -146,7 +152,6 @@ export default function TelemetryDashboard() {
           eyebrow={`Season ${data.schedule.season}`}
           title="Race Calendar"
           feed={data.feed.detail?.schedule}
-          action={<CalendarRange size={16} className="mt-1 text-carbon-400" />}
         >
           <ScheduleStrip schedule={data.schedule} />
         </Panel>
@@ -156,7 +161,7 @@ export default function TelemetryDashboard() {
              Tall enough for the map to dominate, capped so the panels
              below still peek above the fold and the page reads as a
              dashboard rather than a single screen. Stacks under xl. ── */}
-      {/* Explicit fractions rather than 12-col spans: the radio rail needed
+      {/* Explicit fractions rather than 12-col spans: the race-control rail needed
           halving, which isn't expressible in twelfths. The map is
           HEIGHT-constrained (circuits are usually portrait), so its column
           only needs enough width to stop clipping — height is what makes
@@ -170,7 +175,6 @@ export default function TelemetryDashboard() {
           title="Key Metrics"
           feed={data.feed.detail?.session}
           fill
-          action={<Timer size={16} className="mt-1 text-carbon-400" />}
         >
           <div className="h-full overflow-y-auto">
             <StatStrip session={data.session} />
@@ -182,7 +186,6 @@ export default function TelemetryDashboard() {
           title={data.session.circuitName}
           feed={data.feed.detail?.trackOutline}
           fill
-          action={<Map size={16} className="mt-1 text-carbon-400" />}
         >
           {"trackOutline" in d ? (
             <TrackMap circuitName={data.session.circuitName} outline={data.trackOutline} />
@@ -192,13 +195,12 @@ export default function TelemetryDashboard() {
         </Panel>
 
         <Panel
-          eyebrow="Pit wall"
-          title="Radio & Race Control"
-          feed={data.feed.detail?.radio}
+          eyebrow="Race director"
+          title="Race Control"
+          feed={data.feed.detail?.control}
           fill
-          action={<RadioTower size={16} className="mt-1 text-carbon-400" />}
         >
-          {"radio" in d ? <RadioMessages messages={data.radio} /> : <PanelLoading h={280} />}
+          {"control" in d ? <RaceControlFeed messages={data.control} /> : <PanelLoading h={280} />}
         </Panel>
       </div>
 
@@ -208,7 +210,6 @@ export default function TelemetryDashboard() {
           eyebrow="Timing analysis"
           title="Sector Performance"
           feed={data.feed.detail?.sectors}
-          action={<Timer size={16} className="mt-1 text-carbon-400" />}
         >
           {data.sectors ? <SectorChart data={data.sectors} /> : <PanelLoading h={300} />}
         </Panel>
@@ -216,7 +217,6 @@ export default function TelemetryDashboard() {
           eyebrow="Grid → chequered flag"
           title="Position Changes"
           feed={data.feed.detail?.positions}
-          action={<GitCompareArrows size={16} className="mt-1 text-carbon-400" />}
         >
           {data.positions ? <PositionChanges data={data.positions} /> : <PanelLoading h={340} />}
         </Panel>
@@ -228,11 +228,10 @@ export default function TelemetryDashboard() {
           eyebrow="Race story"
           title="Position Worm"
           feed={data.feed.detail?.worm}
-          action={<Route size={16} className="mt-1 text-carbon-400" />}
         >
-          {/* Radio feed doubles as the race-control source for the safety
-              car bands — no extra request. */}
-          {data.worm ? <PositionWormChart data={data.worm} messages={data.radio} /> : <PanelLoading h={420} />}
+          {/* Race control doubles as the source for the safety-car bands —
+              no extra request. */}
+          {data.worm ? <PositionWormChart data={data.worm} messages={data.control} /> : <PanelLoading h={420} />}
         </Panel>
       </div>
 
@@ -243,7 +242,6 @@ export default function TelemetryDashboard() {
           title="Tyre Stint Timeline"
           feed={data.feed.detail?.stints}
           className="xl:col-span-2"
-          action={<CircleDashed size={16} className="mt-1 text-carbon-400" />}
         >
           {data.stints ? <TyreStintTimeline stints={data.stints} totalLaps={data.session.totalLaps} /> : <PanelLoading h={260} />}
         </Panel>
@@ -252,7 +250,6 @@ export default function TelemetryDashboard() {
           title="Pit Stop Leaderboard"
           feed={data.feed.detail?.pits}
           className="xl:col-span-3"
-          action={<Wrench size={16} className="mt-1 text-carbon-400" />}
         >
           {data.pitStops ? <PitStopTable pitStops={data.pitStops} /> : <PanelLoading h={260} />}
         </Panel>
@@ -264,7 +261,6 @@ export default function TelemetryDashboard() {
           title="Degradation Over Stint"
           feed={data.feed.detail?.degradation}
           className="lg:col-span-2"
-          action={<TrendingDown size={16} className="mt-1 text-carbon-400" />}
         >
           {data.degradation ? <DegradationChart data={data.degradation} /> : <PanelLoading h={220} />}
         </Panel>
@@ -274,7 +270,6 @@ export default function TelemetryDashboard() {
           eyebrow="Field metrics"
           title="Driver Demographics"
           feed={data.feed.detail?.demographics}
-          action={<Users size={16} className="mt-1 text-carbon-400" />}
         >
           {data.demographics ? <DemographicsCard data={data.demographics} /> : <PanelLoading h={300} />}
         </Panel>
@@ -287,7 +282,6 @@ export default function TelemetryDashboard() {
           title="Speed Traps & Racing Pace"
           feed={data.feed.detail?.performance}
           className="lg:col-span-2"
-          action={<Gauge size={16} className="mt-1 text-carbon-400" />}
         >
           {data.performance ? <TelemetryCharts data={data.performance} /> : <PanelLoading h={300} />}
         </Panel>
@@ -295,7 +289,6 @@ export default function TelemetryDashboard() {
           eyebrow="Championship"
           title="Standings"
           feed={data.feed.detail?.standings}
-          action={<Trophy size={16} className="mt-1 text-carbon-400" />}
         >
           {data.standings ? <StandingsPanel standings={data.standings} /> : <PanelLoading h={300} />}
         </Panel>

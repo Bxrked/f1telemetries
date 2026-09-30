@@ -1,532 +1,645 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Play, Pause, RotateCcw, Loader2, AlertTriangle, Swords, Flag, Radio as RadioIcon, ListOrdered } from "lucide-react";
-import { getReplayContext, getReplayWindow, projectToTrack, getReplayEvents, getTeamRadio } from "@/services/f1Service";
-import { clearApiCache } from "@/services/apiClient";
+import { AnimatePresence, motion } from "framer-motion";
+import { Play, Pause, SkipBack, SkipForward, ChevronsLeft, ChevronsRight, Volume2, VolumeX, Square } from "lucide-react";
+import { getReplayTimeline, getReplayGpsWindow, getTrackOutline, getPostRaceInterviews } from "@/services/f1Service";
+import { createGpsBuffer, floorIndex } from "@/services/replayModel";
+import { EASE, SPRING, PRESS } from "@/lib/motion";
+import PageTitle from "./PageTitle";
+import ReplayCanvas, { ReplayClock } from "./replay/ReplayCanvas";
+import ReplayTimeline, { EVENT_COLOR } from "./replay/ReplayTimeline";
+import TimingTower from "./replay/TimingTower";
+import EventFeed from "./replay/EventFeed";
+import Interviews from "./replay/Interviews";
+import { useTeamRadio, RadioClip } from "./replay/useTeamRadio";
 
-const WINDOW_MS = 45_000; // 45s chunks: smaller first paint, still few requests
-const SPEEDS = [1, 5, 15, 30, 60];
+const SPEEDS = [1, 2, 5, 10, 30, 60];
+/* Real GPS is streamed at these speeds and below. Above, a lap plays in
+   a few seconds — faster than a ~1 MB lap can download — and lap mode
+   is what's drawn. */
+const GPS_MAX_SPEED = 5;
+const UI_HZ = 8;
+const LOWER_THIRD_MS = 3200;
+/* Radio auto-plays at these speeds and below. A clip runs in real time,
+   so above 2x the race would be a lap further on before it finished. */
+const RADIO_MAX_SPEED = 2;
+const LOWER_THIRD_TYPES = new Set(["fastest", "retired", "penalty", "chequered", "start"]);
 
-const toPath = (pts: number[][]) =>
-  pts.length ? `M ${pts.map((p) => p.join(" ")).join(" L ")}` : "";
+const STATUS_BANNER: Record<string, { label: string; cls: string }> = {
+  sc: { label: "Safety Car", cls: "bg-sector-yellow text-carbon-950" },
+  vsc: { label: "Virtual Safety Car", cls: "border-2 border-dashed border-sector-yellow bg-carbon-950/90 text-sector-yellow" },
+  red: { label: "Red Flag", cls: "bg-f1red text-white" },
+};
 
-const clockLabel = (ms: number) => {
+const clock = (ms: number) => {
   const s = Math.max(0, Math.floor(ms / 1000));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  return `${h}:${String(m).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+  return `${Math.floor(s / 3600)}:${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 };
 
 /**
- * Race Replay — broadcast mode.
- * Auto-loads on mount, buffers the lights-out chunk immediately, and
- * starts playing on its own. The clock HOLDS while a chunk is missing
- * (instead of racing ahead of the data), and prefetch depth scales with
- * playback speed so 60x never starves.
+ * Race replay — the latest Grand Prix, every lap.
+ *
+ * One rAF loop owns the playback clock (a ref). The canvas reads it every
+ * frame; React state is sampled from it at UI_HZ for the tower, feed and
+ * timeline, so reorders and text updates never compete with the map.
  */
-export default function RaceReplay({ outline }: { outline: any }) {
-  const [ctx, setCtx] = useState<any>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [playing, setPlaying] = useState(false);
-  const [speed, setSpeed] = useState(15);
-  const [simTime, setSimTime] = useState<number | null>(null);
-  const [standings, setStandings] = useState<any[]>([]);
-  const [events, setEvents] = useState<any[]>([]);
-  const [radio, setRadio] = useState<any[]>([]);
-  const [tab, setTab] = useState<"order" | "events" | "radio">("order");
-  const [radioDriver, setRadioDriver] = useState<string>("ALL");
-  const [nowPlaying, setNowPlaying] = useState<string | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const [chunkTick, setChunkTick] = useState(0); // increments when a chunk lands
-  const buffers = useRef(new Map<number, any>());
-  const fetching = useRef(new Set<number>());
-  const autoStarted = useRef(false);
-  /* Holds the shared projection transform; dotFor() is declared before the
-     transform is computed, but only *called* during render after it. */
-  const tfRef = useRef<any>(null);
+export default function RaceReplay() {
+  const [data, setData] = useState<any>(null);
+  const [outline, setOutline] = useState<any>(null);
+  const [failed, setFailed] = useState(false);
 
-  const t0 = ctx ? new Date(ctx.dateStart).getTime() : 0; // window-grid origin
-  const tEnd = ctx ? ctx.raceEnd : 0;
-  const lightsOut = ctx ? Math.max(t0, ctx.raceStart - 5_000) : 0;
-  const windowStartFor = (t: number) => t0 + Math.floor((t - t0) / WINDOW_MS) * WINDOW_MS;
+  const clockRef = useRef<ReplayClock>({ t: 0, speed: 10, playing: false });
+  const [ui, setUi] = useState({ t: 0, speed: 10, playing: false });
+  const [focus, setFocus] = useState<number | null>(null);
+  const [lowerThird, setLowerThird] = useState<any>(null);
+  const [panel, setPanel] = useState<"feed" | "interviews">("feed");
+  const [interviews, setInterviews] = useState<any>(null);
+  const [promptDismissed, setPromptDismissed] = useState(false);
+  const gpsRef = useRef<ReturnType<typeof createGpsBuffer> | null>(null);
+  const [gpsLive, setGpsLive] = useState(false);
 
-  /* ---- Load session context automatically on mount ---- */
-  const load = useCallback(async () => {
-    setError(null);
-    try {
-      const c = await getReplayContext();
-      if (!c) throw new Error("Replay data isn't available for this session yet — it appears ~30 minutes after a race ends.");
-      setCtx(c);
-      setSimTime(Math.max(new Date(c.dateStart).getTime(), c.raceStart - 5_000));
-    } catch (e: any) {
-      setError(e?.message ?? "Failed to load replay.");
-    }
+  /* Team radio. The clock loop reads the manager and the auto toggle via
+     refs, so toggling never restarts the loop. */
+  const radio = useTeamRadio();
+  const radioRef = useRef(radio);
+  radioRef.current = radio;
+  const [autoRadio, setAutoRadio] = useState(true);
+  const autoRadioRef = useRef(autoRadio);
+  autoRadioRef.current = autoRadio;
+  /* The clip a click just started — the loop must not start it again
+     when the playhead crosses its timestamp a second later. */
+  const handStarted = useRef<string | null>(null);
+
+  /* Post-race interviews: one request to our own API, fetched once the
+     replay has loaded so it never competes with the timeline. */
+  useEffect(() => {
+    if (!data) return;
+    getPostRaceInterviews().then(setInterviews).catch(() => setInterviews({ status: "unreachable" }));
+  }, [data]);
+
+  /* ---- Load ---- */
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([getReplayTimeline(), getTrackOutline()])
+      .then(([d, o]) => {
+        if (cancelled) return;
+        if (!d || !o?.transform) return setFailed(true);
+        setData(d);
+        setOutline(o);
+        const t0 = d.timeline.raceStart - 3000;
+        clockRef.current = { t: t0, speed: 10, playing: false };
+        setUi({ t: t0, speed: 10, playing: false });
+        gpsRef.current = createGpsBuffer({
+          fetchWindow: (from: number, to: number) => getReplayGpsWindow(d.sessionKey, from, to),
+          leaderStarts: d.timeline.leaderStarts,
+          raceEnd: d.timeline.raceEnd,
+        });
+        /* A beat on the grid, then lights out. */
+        setTimeout(() => {
+          if (!cancelled) {
+            clockRef.current.playing = true;
+            setUi((u) => ({ ...u, playing: true }));
+          }
+        }, 900);
+      })
+      .catch(() => !cancelled && setFailed(true));
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
+  const tl = data?.timeline;
+  const tMin = tl ? tl.raceStart - 3000 : 0;
+  const tMax = tl ? tl.raceEnd + 5000 : 0;
+  const lowerTypes = useMemo(() => (data ? data.events.filter((e: any) => LOWER_THIRD_TYPES.has(e.type)) : []), [data]);
+  const lowerTimes = useMemo(() => lowerTypes.map((e: any) => e.t), [lowerTypes]);
+  const clips: RadioClip[] = useMemo(() => data?.radio ?? [], [data]);
+  const clipTimes = useMemo(() => clips.map((c) => c.t), [clips]);
+
+  /* ---- Clock ---- */
   useEffect(() => {
-    load();
-  }, [load]);
-
-  /* Events + radio are small fetches; load them once context exists. */
-  useEffect(() => {
-    if (!ctx) return;
-    getReplayEvents().then(setEvents).catch(() => setEvents([]));
-    getTeamRadio().then(setRadio).catch(() => setRadio([]));
-  }, [ctx]);
-
-  const jumpTo = useCallback((t: number) => {
-    setSimTime(Math.max(t0, t - 8_000));
-    setSpeed(5);
-    setPlaying(true);
-  }, [t0]);
-
-  const playClip = useCallback((url: string) => {
-    if (!audioRef.current) audioRef.current = new Audio();
-    const el = audioRef.current;
-    if (nowPlaying === url) {
-      el.pause();
-      setNowPlaying(null);
-      return;
-    }
-    el.src = url;
-    el.play().catch(() => {});
-    setNowPlaying(url);
-    el.onended = () => setNowPlaying(null);
-  }, [nowPlaying]);
-
-  /* Stop audio when leaving the page. */
-  useEffect(() => () => { audioRef.current?.pause(); }, []);
-
-  /* ---- Chunk buffering, prefetch depth scaled to speed ---- */
-  const ensureWindow = useCallback(
-    (ws: number) => {
-      if (!ctx || ws >= tEnd || ws < t0 || buffers.current.has(ws) || fetching.current.has(ws)) return;
-      fetching.current.add(ws);
-      getReplayWindow(ctx.sessionKey, ws, ws + WINDOW_MS)
-        .then((w) => {
-          buffers.current.set(ws, w);
-          setChunkTick((x) => x + 1);
-        })
-        .catch(() => {})
-        .finally(() => fetching.current.delete(ws));
-    },
-    [ctx, t0, tEnd]
-  );
-
-  useEffect(() => {
-    if (!ctx || simTime == null) return;
-    const ws = windowStartFor(simTime);
-    /* Keep ~8 seconds of real-time lookahead buffered. At 1x that's one
-       chunk; at 60x it's several — which is what stops the stutter when
-       fast-forwarding or seeking. */
-    const LOOKAHEAD_SECONDS = 8;
-    const depth = Math.min(5, Math.max(1, Math.ceil((speed * LOOKAHEAD_SECONDS) / (WINDOW_MS / 1000))));
-    for (let i = 0; i <= depth; i++) ensureWindow(ws + i * WINDOW_MS);
-    for (const key of Array.from(buffers.current.keys())) {
-      if (key < ws - WINDOW_MS || key > ws + (depth + 1) * WINDOW_MS) buffers.current.delete(key);
-    }
-  }, [simTime, speed, ctx, ensureWindow]);
-
-  /* ---- Autoplay once the lights-out chunk is buffered ---- */
-  useEffect(() => {
-    if (!ctx || autoStarted.current || simTime == null) return;
-    if (buffers.current.has(windowStartFor(simTime))) {
-      autoStarted.current = true;
-      setPlaying(true);
-    }
-  }, [chunkTick, ctx, simTime]); // eslint-disable-line
-
-  /* ---- Playback clock: holds while the current chunk is buffering ---- */
-  useEffect(() => {
-    if (!playing || !ctx) return;
-    let raf: number;
+    if (!data) return;
+    let raf = 0;
     let last = performance.now();
-    const tick = (now: number) => {
-      const dt = now - last;
+    let lastUi = 0;
+    let lastGps = 0;
+    let hideLower: ReturnType<typeof setTimeout> | null = null;
+    const loop = (now: number) => {
+      const c = clockRef.current;
+      const dt = Math.min(100, now - last);
       last = now;
-      setSimTime((t) => {
-        const cur = t ?? lightsOut;
-        // Hold the clock while the chunk covering `cur` is still loading.
-        if (!buffers.current.has(windowStartFor(cur))) return cur;
-        const next = Math.min(cur + dt * speed, tEnd);
-        if (next >= tEnd) setPlaying(false);
-        return next;
-      });
-      raf = requestAnimationFrame(tick);
+      if (c.playing) {
+        const prev = c.t;
+        c.t = Math.min(tMax, c.t + dt * c.speed);
+        if (c.t >= tMax) c.playing = false;
+        /* Broadcast lower-third for notable events crossed in play (not
+           on a seek — that would flash whatever it jumped over). */
+        const i = floorIndex(lowerTimes, c.t);
+        if (i >= 0 && lowerTimes[i] > prev) {
+          setLowerThird({ ...lowerTypes[i], key: `${lowerTimes[i]}` });
+          if (hideLower) clearTimeout(hideLower);
+          hideLower = setTimeout(() => setLowerThird(null), LOWER_THIRD_MS);
+        }
+        /* Radio as it happens — every clip whose moment was crossed this
+           frame, oldest first, at speeds where it can keep up. */
+        if (autoRadioRef.current && c.speed <= RADIO_MAX_SPEED && c.t - prev < 5000) {
+          for (let k = floorIndex(clipTimes, prev) + 1; k < clips.length && clips[k].t <= c.t; k++) {
+            if (clips[k].url === handStarted.current) continue;
+            radioRef.current.enqueue(clips[k], c.t);
+          }
+        }
+      }
+      if (now - lastGps > 250) {
+        lastGps = now;
+        const gps = gpsRef.current;
+        if (gps && c.speed <= GPS_MAX_SPEED) gps.want(c.t);
+        setGpsLive(!!gps && c.speed <= GPS_MAX_SPEED && gps.has(c.t));
+      }
+      if (now - lastUi > 1000 / UI_HZ) {
+        lastUi = now;
+        setUi({ t: c.t, speed: c.speed, playing: c.playing });
+      }
+      raf = requestAnimationFrame(loop);
     };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [playing, speed, ctx, tEnd]); // eslint-disable-line
+    raf = requestAnimationFrame(loop);
+    return () => {
+      cancelAnimationFrame(raf);
+      if (hideLower) clearTimeout(hideLower);
+    };
+  }, [data, tMax, lowerTimes, lowerTypes, clips, clipTimes]);
 
-  /* ---- Standings board (2 Hz) ---- */
+  /* Pausing the race pauses the radio mid-sentence; playing resumes it. */
   useEffect(() => {
-    if (!ctx || simTime == null) return;
-    const compute = () => {
-      const latestPos: Record<number, number> = {};
-      for (const row of ctx.positions) {
-        if (row.t > simTime) break;
-        latestPos[row.n] = row.pos;
+    radio.setRacePlaying(ui.playing);
+  }, [ui.playing, radio]);
+
+  /* ---- Controls ---- */
+  const sync = () => setUi({ ...clockRef.current });
+  const seek = useCallback(
+    (t: number) => {
+      clockRef.current.t = Math.max(tMin, Math.min(tMax, t));
+      setLowerThird(null);
+      /* Radio belongs to a moment; leaving the moment ends it. */
+      radioRef.current.stop();
+      handStarted.current = null;
+      sync();
+    },
+    [tMin, tMax]
+  );
+  const togglePlay = useCallback(() => {
+    const c = clockRef.current;
+    if (!c.playing && c.t >= tMax) c.t = tMin;
+    c.playing = !c.playing;
+    sync();
+  }, [tMin, tMax]);
+  const setSpeed = useCallback((s: number) => {
+    clockRef.current.speed = s;
+    sync();
+  }, []);
+  const stepLap = useCallback(
+    (dir: 1 | -1) => {
+      if (!tl) return;
+      const starts = tl.leaderStarts;
+      const i = floorIndex(starts, clockRef.current.t);
+      /* Back: to this lap's start, or the previous one if we're right on it. */
+      const target =
+        dir > 0
+          ? starts[i + 1] ?? tMax
+          : clockRef.current.t - (starts[i] ?? tMin) > 3000
+            ? starts[i]
+            : starts[Math.max(0, i - 1)];
+      seek(target ?? tMin);
+    },
+    [tl, seek, tMin, tMax]
+  );
+  const stepEvent = useCallback(
+    (dir: 1 | -1) => {
+      if (!data) return;
+      const evs = data.events.filter((e: any) => e.type !== "pit" && e.type !== "radio");
+      const t = clockRef.current.t;
+      const target = dir > 0 ? evs.find((e: any) => e.t - 4000 > t + 500) : [...evs].reverse().find((e: any) => e.t - 4000 < t - 1500);
+      if (target) seek(target.t - 4000);
+    },
+    [data, seek]
+  );
+  /* Playing a clip by hand (feed or timeline): land just before it at 1x
+     so the car is on screen as the message goes out. Clicking the clip
+     that's already playing stops it. */
+  const playRadio = useCallback(
+    (e: any) => {
+      if (radioRef.current.current?.url === e.url) {
+        radioRef.current.stop();
+        return;
       }
-      const ws = windowStartFor(simTime);
-      const gapRows = [
-        ...(buffers.current.get(ws - WINDOW_MS)?.gaps ?? []),
-        ...(buffers.current.get(ws)?.gaps ?? []),
-      ];
-      const latestGap: Record<number, any> = {};
-      for (const g of gapRows) {
-        if (g.t > simTime) break;
-        latestGap[g.n] = g.gap;
-      }
-      setStandings(
-        Object.entries(latestPos)
-          .map(([n, pos]) => {
-            const id = ctx.drivers[+n] ?? {};
-            const gap = latestGap[+n];
-            return {
-              n: +n,
-              pos,
-              code: id.code ?? n,
-              color: id.teamColor ?? "#8B95A7",
-              gap:
-                pos === 1 ? "Leader"
-                : typeof gap === "number" ? `+${gap.toFixed(1)}s`
-                : typeof gap === "string" ? gap
-                : "—",
-            };
-          })
-          .sort((a, b) => a.pos - b.pos)
-      );
-    };
-    compute();
-    if (!playing) return;
-    const id = setInterval(compute, 500);
-    return () => clearInterval(id);
-  }, [ctx, playing, simTime == null ? null : Math.floor(simTime / 500)]); // eslint-disable-line
-
-  /* ---- Dot positions ----
-     Runs for every driver on every animation frame, so it must stay cheap:
-     binary search instead of a linear scan, and no array spreading. */
-  const dotFor = (num: number): number[] | null => {
-    if (simTime == null || !tfRef.current) return null;
-    const ws = windowStartFor(simTime);
-    /* Only use the window that actually contains simTime (or the one just
-       before it). After a seek, older buffers must not paint stale dots. */
-    const cur = buffers.current.get(ws)?.locations?.[num];
-    const prev = buffers.current.get(ws - WINDOW_MS)?.locations?.[num];
-    const samples = cur?.length ? cur : prev;
-    if (!samples?.length) return null;
-
-    let lo = 0, hi = samples.length - 1;
-    while (lo < hi) {
-      const mid = (lo + hi + 1) >> 1;
-      if (samples[mid].t <= simTime) lo = mid; else hi = mid - 1;
-    }
-    const a = samples[lo];
-    const b = samples[Math.min(lo + 1, samples.length - 1)];
-    if (simTime - a.t > 15_000) return null;
-    const f = b.t === a.t ? 0 : Math.min(1, Math.max(0, (simTime - a.t) / (b.t - a.t)));
-    return projectToTrack(tfRef.current, a.x + (b.x - a.x) * f, a.y + (b.y - a.y) * f);
-  };
-
-  /* ---- Geometry ----
-     The outline now comes from a lap chosen by closure score, so its own
-     transform is trustworthy — the union-bounds machinery I added to work
-     around bad traces is gone. Memoised only so the path isn't rebuilt on
-     every animation frame. */
-  const tf = outline?.transform ?? null;
-  tfRef.current = tf;
-
-  const fullPath = useMemo(
-    () =>
-      outline?.sectors
-        ? toPath([
-            ...outline.sectors.s1,
-            ...outline.sectors.s2.slice(1),
-            ...outline.sectors.s3.slice(1),
-          ])
-        : "",
-    [outline]
+      seek(e.t - 1500);
+      clockRef.current.speed = 1;
+      clockRef.current.playing = true;
+      handStarted.current = e.url;
+      radioRef.current.play({ t: e.t, num: e.nums?.[0] ?? e.num, url: e.url });
+      sync();
+    },
+    [seek]
   );
 
-  /* ---- Render states ---- */
-  if (!outline?.transform) {
-    return (
-      <p className="flex items-center gap-2 rounded-lg border border-carbon-700 bg-carbon-900/60 px-4 py-3 text-xs text-carbon-400">
-        <AlertTriangle size={13} className="text-sector-yellow" />
-        Replay needs the live-traced circuit outline, which is unavailable right now.
-      </p>
-    );
-  }
+  /* Jumping to an event: land a few seconds before it at 2x, where GPS
+     is live, so the moment plays out on the real racing line. */
+  const jumpTo = useCallback(
+    (e: any) => {
+      if (e.type === "radio") return playRadio(e);
+      seek(e.t - 4000);
+      clockRef.current.speed = 2;
+      clockRef.current.playing = true;
+      if (e.nums?.length === 1) setFocus(e.nums[0]);
+      sync();
+    },
+    [seek, playRadio]
+  );
 
-  if (error) {
+  /* Keyboard: space play/pause · ←/→ lap · ,/. event · ↑/↓ speed · Esc unfocus */
+  useEffect(() => {
+    if (!data) return;
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+      const idx = SPEEDS.indexOf(clockRef.current.speed);
+      if (e.key === " ") { e.preventDefault(); togglePlay(); }
+      else if (e.key === "ArrowRight") { e.preventDefault(); stepLap(1); }
+      else if (e.key === "ArrowLeft") { e.preventDefault(); stepLap(-1); }
+      else if (e.key === ".") stepEvent(1);
+      else if (e.key === ",") stepEvent(-1);
+      else if (e.key === "ArrowUp") { e.preventDefault(); setSpeed(SPEEDS[Math.min(SPEEDS.length - 1, idx + 1)]); }
+      else if (e.key === "ArrowDown") { e.preventDefault(); setSpeed(SPEEDS[Math.max(0, idx - 1)]); }
+      else if (e.key === "Escape") setFocus(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [data, togglePlay, stepLap, stepEvent, setSpeed]);
+
+  /* ---- Derived UI state (sampled at UI_HZ) ---- */
+  const cars = useMemo(() => (tl ? tl.snapshot(ui.t) : []), [tl, ui.t]);
+  const gaps = useMemo(() => (tl ? tl.gaps(cars, ui.t) : []), [tl, cars, ui.t]);
+  const lap = tl ? tl.lapAt(ui.t) : 1;
+  const status = data?.status.find((s: any) => ui.t >= s.from && ui.t <= s.to) ?? null;
+  const preStart = tl && ui.t < tl.raceStart;
+  const chequeredAt = data?.events.find((e: any) => e.type === "chequered")?.t ?? null;
+
+  if (failed) {
     return (
-      <div className="flex flex-col items-center gap-3 rounded-lg border border-carbon-700 bg-carbon-900/60 px-6 py-8">
-        <p className="text-center text-xs text-f1red-bright">{error}</p>
-        <button
-          onClick={load}
-          className="timing rounded-lg border border-carbon-600 px-4 py-1.5 text-[11px] font-bold uppercase tracking-wider text-carbon-300 transition hover:text-carbon-100"
-        >
-          Retry
-        </button>
+      <div className="flex min-h-[50vh] flex-col items-center justify-center gap-2 rounded-panel border border-carbon-700 bg-carbon-850 px-6 text-center">
+        <p className="timing text-label font-bold uppercase tracking-wider text-carbon-300">Replay unavailable</p>
+        <p className="max-w-md text-data leading-relaxed text-carbon-400">
+          The replay is built from live timing and GPS for the latest race, and that data couldn&apos;t be loaded right
+          now. It usually appears about 30 minutes after a race finishes.
+        </p>
       </div>
     );
   }
 
-  if (!ctx) {
+  if (!data || !outline) {
     return (
-      <div className="flex items-center justify-center gap-2 rounded-lg border border-carbon-700 bg-carbon-900/60 px-6 py-10">
-        <Loader2 size={14} className="animate-spin text-f1red-bright" />
-        <span className="timing text-xs text-carbon-300">Loading session data…</span>
+      <div>
+        <div className="skeleton mb-6 h-24 w-1/2" />
+        <div className="grid gap-2 lg:h-[86vh] lg:grid-cols-[210px_1fr_250px]">
+          <div className="skeleton h-40 lg:h-full" />
+          <div className="skeleton h-[50vh] lg:h-full" />
+          <div className="skeleton hidden lg:block" />
+        </div>
+        <p className="timing mt-4 flex items-center justify-center gap-2 text-micro uppercase tracking-[0.22em] text-carbon-500">
+          <span className="h-1.5 w-1.5 animate-pulse-dot rounded-full bg-f1red-bright" />
+          Building race timeline
+        </p>
       </div>
     );
   }
-
-  const buffering = simTime != null && !buffers.current.has(windowStartFor(simTime));
-  const EVENT_HEX: Record<string, string> = {
-    start: "#E7EAF0", overtake: "#2EE07C", sc: "#FFD644", "sc-end": "#8B95A7",
-    vsc: "#FFD644", red: "#FF1E00", penalty: "#B44CFF",
-  };
-  const pct = (t: number) => `${(((t - t0) / (tEnd - t0)) * 100).toFixed(2)}%`;
-  /* Ring the two dots involved in an overtake for ±5s around it. */
-  const ringed = new Set<string>();
-  if (simTime != null) {
-    events.forEach((e) => {
-      if (e.type === "overtake" && Math.abs(e.t - simTime) < 5_000) e.drivers.forEach((c: string) => ringed.add(c));
-    });
-  }
-  const radioMarkers = radioDriver === "ALL" ? [] : radio.filter((r) => r.code === radioDriver);
-
-  /* Dot positions + label de-collision.
-     Cars bunch tightly (grid, pit exit, safety car) and 20 stacked codes
-     become an unreadable blob. Labels are assigned greedily in running
-     order — leaders and drivers in a highlighted overtake win priority,
-     and a label is dropped if another label already sits within
-     LABEL_MIN_DIST of it. The dot itself is always drawn. */
-  const LABEL_MIN_DIST = 22;
-  const orderOf: Record<string, number> = {};
-  standings.forEach((r: any) => (orderOf[r.code] = r.pos));
-  const dots = Object.keys(ctx.drivers)
-    .map((numStr) => {
-      const num = +numStr;
-      const pt = dotFor(num);
-      if (!pt) return null;
-      const id = ctx.drivers[num];
-      return { num, id, pt, pos: orderOf[id.code] ?? 99, label: false };
-    })
-    .filter(Boolean) as any[];
-  dots.sort((a, b) => {
-    const ra = ringed.has(a.id.code) ? -1 : 0;
-    const rb = ringed.has(b.id.code) ? -1 : 0;
-    return ra - rb || a.pos - b.pos;
-  });
-  const placed: number[][] = [];
-  dots.forEach((d) => {
-    const clash = placed.some(
-      (p) => Math.hypot(p[0] - d.pt[0], p[1] - d.pt[1]) < LABEL_MIN_DIST
-    );
-    if (!clash) {
-      d.label = true;
-      placed.push(d.pt);
-    }
-  });
-  /* Draw the circuit from raw coords with the shared transform (falls back
-     to the pre-projected path if raw points aren't available). */
-
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[1fr_240px]">
-      <div>
-        {/* Controls */}
-        <div className="mb-2 flex flex-wrap items-center gap-2">
-          <button
-            onClick={() => setPlaying((p) => !p)}
-            className="grid h-8 w-8 place-items-center rounded-lg bg-f1red text-white transition hover:bg-f1red-bright"
-            aria-label={playing ? "Pause" : "Play"}
-          >
-            {playing ? <Pause size={14} /> : <Play size={14} />}
-          </button>
-          <button
-            onClick={() => { setSimTime(lightsOut); }}
-            className="grid h-8 w-8 place-items-center rounded-lg border border-carbon-600 text-carbon-300 transition hover:text-carbon-100"
-            aria-label="Back to lights out"
-          >
-            <RotateCcw size={13} />
-          </button>
-          <button
-            onClick={() => { clearApiCache(); window.location.reload(); }}
-            title="Clear cached data and reload (use if the map or timing looks stale)"
-            className="timing rounded-md border border-carbon-600 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-carbon-400 transition hover:text-carbon-100"
-          >
-            reset
-          </button>
-          {SPEEDS.map((s) => (
-            <button
-              key={s}
-              onClick={() => setSpeed(s)}
-              className={`timing rounded-md px-2 py-1 text-[10px] font-bold transition
-                ${speed === s ? "bg-carbon-600 text-carbon-100" : "text-carbon-400 hover:text-carbon-100"}`}
-            >
-              {s}x
-            </button>
-          ))}
-          <span className="timing ml-auto flex items-center gap-2 text-xs text-carbon-300">
-            {buffering && (
-              <span className="flex items-center gap-1 text-sector-yellow">
-                <Loader2 size={12} className="animate-spin" /> buffering
-              </span>
-            )}
-            T+{clockLabel((simTime ?? lightsOut) - lightsOut)}
-          </span>
-        </div>
-
-        {/* Seek bar + event markers */}
-        <input
-          type="range"
-          min={t0}
-          max={tEnd}
-          step={1000}
-          value={simTime ?? lightsOut}
-          onChange={(e) => setSimTime(+e.target.value)}
-          className="w-full accent-f1red"
-          aria-label="Race timeline"
-        />
-        <div className="relative mb-2 h-3.5">
-          {events.filter((e) => e.t >= t0 && e.t <= tEnd).map((e, i) => (
-            <button
-              key={`e${i}`}
-              onClick={() => jumpTo(e.t)}
-              title={`L${e.lap} · ${e.label}`}
-              className="absolute top-0 h-2.5 w-[3px] -translate-x-1/2 rounded-sm transition-transform hover:scale-y-150"
-              style={{ left: pct(e.t), background: EVENT_HEX[e.type] ?? "#8B95A7" }}
-            />
-          ))}
-          {radioMarkers.map((r, i) => (
-            <button
-              key={`r${i}`}
-              onClick={() => playClip(r.url)}
-              title={`L${r.lap} · ${r.code} radio`}
-              className="absolute top-0 h-2.5 w-[3px] -translate-x-1/2 rounded-sm opacity-70 transition-transform hover:scale-y-150"
-              style={{ left: pct(r.t), background: r.color, top: "0.35rem" }}
-            />
-          ))}
-        </div>
-
-        {/* Track + dots */}
-        <svg viewBox="0 0 660 360" className="w-full rounded-lg bg-carbon-900/40">
-          <path d={fullPath} fill="none" stroke="#1E2430" strokeWidth="12" strokeLinecap="round" strokeLinejoin="round" />
-          <path d={fullPath} fill="none" stroke="#2A3242" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-          {dots.map(({ num, id, pt, label }) => (
-            <g key={num}>
-              {ringed.has(id.code) && (
-                <circle cx={pt[0]} cy={pt[1]} r="9" fill="none" stroke="#2EE07C" strokeWidth="1.5" opacity="0.85" />
-              )}
-              <circle cx={pt[0]} cy={pt[1]} r="4.5" fill={id.teamColor} stroke="#08090C" strokeWidth="1.2" />
-              {label && (
-                <text
-                  x={pt[0]}
-                  y={pt[1] - 7}
-                  textAnchor="middle"
-                  className="select-none"
-                  style={{ fill: "#E7EAF0", fontSize: 8, fontFamily: "var(--font-timing)", fontWeight: 700, paintOrder: "stroke", stroke: "#08090C", strokeWidth: 2.5 }}
-                >
-                  {id.code}
-                </text>
-              )}
-            </g>
-          ))}
-        </svg>
-      </div>
-
-      {/* Sidebar: Order / Events / Radio */}
-      <div className="flex max-h-[470px] flex-col rounded-lg border border-carbon-700 bg-carbon-900/60 p-2">
-        <div className="mb-2 grid grid-cols-3 gap-1 rounded-lg bg-carbon-950/60 p-1">
-          {([
-            ["order", ListOrdered, "Order"],
-            ["events", Flag, "Events"],
-            ["radio", RadioIcon, "Radio"],
-          ] as const).map(([key, Icon, label]) => (
-            <button
-              key={key}
-              onClick={() => setTab(key)}
-              className={`timing flex items-center justify-center gap-1 rounded-md px-1 py-1 text-[9px] font-bold uppercase tracking-wider transition
-                ${tab === key ? "bg-f1red text-white" : "text-carbon-400 hover:text-carbon-100"}`}
-            >
-              <Icon size={11} /> {label}
-            </button>
-          ))}
-        </div>
-
-        {tab === "order" && (
-          <ul className="space-y-0.5 overflow-y-auto">
-            {standings.map((r) => (
-              <li key={r.n} className="timing flex items-center gap-2 rounded px-1.5 py-1 text-[11px]">
-                <span className="w-5 text-right font-bold text-carbon-400">{r.pos}</span>
-                <span className="h-3.5 w-[3px] rounded-full" style={{ background: r.color }} />
-                <span className={`font-bold ${ringed.has(r.code) ? "text-sector-green" : "text-carbon-100"}`}>{r.code}</span>
-                <span className="ml-auto text-carbon-400">{r.gap}</span>
-              </li>
-            ))}
-            {!standings.length && (
-              <li className="px-1.5 py-2 text-[11px] text-carbon-400">Waiting for position data…</li>
-            )}
-          </ul>
-        )}
-
-        {tab === "events" && (
-          <ul className="space-y-0.5 overflow-y-auto">
-            {events.map((e, i) => (
-              <li key={i}>
-                <button
-                  onClick={() => jumpTo(e.t)}
-                  className={`timing flex w-full items-center gap-2 rounded px-1.5 py-1 text-left text-[10px] transition hover:bg-carbon-800/70
-                    ${simTime != null && e.t <= simTime ? "text-carbon-100" : "text-carbon-400"}`}
-                >
-                  <span className="w-7 shrink-0 text-right text-carbon-400">L{e.lap}</span>
-                  <span className="h-2 w-2 shrink-0 rounded-[2px]" style={{ background: EVENT_HEX[e.type] ?? "#8B95A7" }} />
-                  <span className="truncate">{e.label}</span>
-                </button>
-              </li>
-            ))}
-            {!events.length && <li className="px-1.5 py-2 text-[11px] text-carbon-400">No events available.</li>}
-          </ul>
-        )}
-
-        {tab === "radio" && (
+    <div>
+      <PageTitle
+        eyebrow={
           <>
-            <select
-              value={radioDriver}
-              onChange={(e) => setRadioDriver(e.target.value)}
-              className="timing mb-2 w-full rounded-md border border-carbon-700 bg-carbon-950 px-2 py-1 text-[10px] text-carbon-100"
-              aria-label="Filter radio by driver"
-            >
-              <option value="ALL">All drivers</option>
-              {Object.values(ctx.drivers).map((d: any) => (
-                <option key={d.code} value={d.code}>{d.code}</option>
-              ))}
-            </select>
-            <ul className="space-y-0.5 overflow-y-auto">
-              {radio
-                .filter((r) => radioDriver === "ALL" || r.code === radioDriver)
-                .map((r, i) => (
-                  <li key={i}>
-                    <button
-                      onClick={() => playClip(r.url)}
-                      className={`timing flex w-full items-center gap-2 rounded px-1.5 py-1 text-left text-[10px] transition hover:bg-carbon-800/70
-                        ${nowPlaying === r.url ? "bg-carbon-800 text-sector-green" : "text-carbon-300"}`}
-                    >
-                      <span className="w-7 shrink-0 text-right text-carbon-400">L{r.lap}</span>
-                      <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: r.color }} />
-                      <span className="font-bold">{r.code}</span>
-                      {nowPlaying === r.url ? <Pause size={10} className="ml-auto" /> : <Play size={10} className="ml-auto" />}
-                    </button>
-                  </li>
-                ))}
-              {!radio.length && <li className="px-1.5 py-2 text-[11px] text-carbon-400">No radio clips available.</li>}
-            </ul>
+            <span className="inline-block h-1.5 w-1.5 animate-pulse-dot rounded-full bg-f1red-bright" />
+            Race replay · every lap
           </>
-        )}
+        }
+        title={data.raceName}
+        tone={(w, i) => (/^grand$|^prix$/i.test(w) ? "text-carbon-400" : "text-carbon-100")}
+      />
+
+      <div className="grid gap-2 lg:h-[86vh] lg:min-h-[640px] lg:grid-cols-[210px_1fr_250px]">
+        {/* Tower */}
+        <section className="order-2 flex min-h-0 flex-col rounded-panel border border-carbon-700 bg-carbon-850 p-2 shadow-panel max-lg:h-[420px] lg:order-1">
+          <TimingTower data={data} cars={cars} gaps={gaps} lap={lap} t={ui.t} focus={focus} onFocus={setFocus} speaking={radio.current?.num ?? null} />
+        </section>
+
+        {/* Map */}
+        <section className="relative order-1 flex min-h-0 flex-col overflow-hidden rounded-panel border border-carbon-700 bg-carbon-900 shadow-panel lg:order-2">
+          <div className="relative min-h-[360px] flex-1 px-2 pb-2 pt-12 sm:min-h-[480px]">
+            <ReplayCanvas data={data} outline={outline} clockRef={clockRef} gps={gpsRef} focus={focus} speakingRef={radio.speakingRef} />
+
+            {/* Lap counter */}
+            <div className="pointer-events-none absolute left-4 top-3">
+              <p className="eyebrow">{preStart ? "Formation" : "Lap"}</p>
+              <p className="timing text-3xl font-bold leading-none text-carbon-100">
+                {Math.min(lap, tl.totalLaps)}
+                <span className="text-lg text-carbon-500">/{tl.totalLaps}</span>
+              </p>
+              <p className="timing mt-1 text-micro text-carbon-400">T+{clock(ui.t - tl.raceStart)}</p>
+            </div>
+
+            {/* Source chip — honest about what's drawn right now */}
+            <div className="pointer-events-none absolute right-4 top-3 flex flex-col items-end gap-1">
+              <span
+                className={`timing flex items-center gap-1.5 rounded-row border px-2 py-0.5 text-micro font-bold uppercase tracking-wider transition-colors duration-layout
+                  ${gpsLive ? "border-sector-green/50 text-sector-green" : "border-carbon-600 text-carbon-400"}`}
+                title={
+                  gpsLive
+                    ? "Cars are drawn from real GPS"
+                    : "Cars are placed from lap timing on the circuit's speed profile. Slow to 5x or below for real GPS."
+                }
+              >
+                <span className={`h-1.5 w-1.5 rounded-full ${gpsLive ? "animate-pulse-dot bg-sector-green" : "bg-carbon-500"}`} />
+                {gpsLive ? "GPS" : "Timing"}
+              </span>
+              {focus != null && (
+                <button
+                  type="button"
+                  onClick={() => setFocus(null)}
+                  className="pointer-events-auto timing rounded-row border border-carbon-600 bg-carbon-950/80 px-2 py-0.5 text-micro font-bold uppercase tracking-wider text-carbon-300 hover:text-carbon-100"
+                >
+                  {data.drivers[focus]?.code} · clear
+                </button>
+              )}
+            </div>
+
+            {/* Track status banner */}
+            <AnimatePresence>
+              {status && (
+                <motion.div
+                  key={status.type + status.from}
+                  className="pointer-events-none absolute left-1/2 top-3 -translate-x-1/2"
+                  initial={{ y: -40, opacity: 0 }}
+                  animate={{ y: 0, opacity: 1 }}
+                  exit={{ y: -40, opacity: 0, transition: { duration: 0.25, ease: EASE.in } }}
+                  transition={{ duration: 0.45, ease: EASE.out }}
+                >
+                  <span
+                    className={`block -skew-x-12 px-4 py-1 font-display text-sm font-black uppercase italic tracking-wider shadow-panel ${STATUS_BANNER[status.type].cls}`}
+                  >
+                    <span className="block skew-x-12">{STATUS_BANNER[status.type].label}</span>
+                  </span>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* Team radio: now playing, or the browser's first-play block */}
+            <AnimatePresence>
+              {(radio.current || radio.blocked) && (
+                <motion.div
+                  key={radio.blocked ? "blocked" : radio.current!.url}
+                  className="absolute bottom-4 right-4 flex items-stretch overflow-hidden shadow-panel"
+                  initial={{ clipPath: "inset(0 0 0 100%)" }}
+                  animate={{ clipPath: "inset(0 0 0 0%)" }}
+                  exit={{ clipPath: "inset(0 100% 0 0)", transition: { duration: 0.25, ease: EASE.in } }}
+                  transition={{ duration: 0.45, ease: EASE.out }}
+                >
+                  {radio.blocked ? (
+                    <button
+                      type="button"
+                      onClick={radio.unblock}
+                      className="timing flex items-center gap-2 border border-carbon-600 bg-carbon-950/95 px-3 py-2 text-micro font-bold uppercase tracking-wider text-carbon-300 transition-colors duration-micro hover:text-carbon-100"
+                    >
+                      <Volume2 size={13} /> Browser muted radio · tap to hear it
+                    </button>
+                  ) : (
+                    <>
+                      <span className="w-1" style={{ background: data.drivers[radio.current!.num]?.teamColor }} />
+                      <span className="flex items-center gap-3 bg-carbon-950/95 py-1.5 pl-3 pr-2">
+                        <span>
+                          <span className="eyebrow block">Team radio</span>
+                          <span className="font-display text-base font-bold uppercase tracking-wide text-carbon-100">
+                            {data.drivers[radio.current!.num]?.name ?? data.drivers[radio.current!.num]?.code}
+                          </span>
+                        </span>
+                        <RadioBars color={data.drivers[radio.current!.num]?.teamColor} />
+                        <button
+                          type="button"
+                          onClick={radio.stop}
+                          aria-label="Stop team radio"
+                          className="grid h-7 w-7 place-items-center rounded-row border border-carbon-700 text-carbon-300 transition-colors duration-micro hover:border-carbon-600 hover:text-carbon-100"
+                        >
+                          <Square size={10} fill="currentColor" />
+                        </button>
+                      </span>
+                    </>
+                  )}
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* After the flag: an invitation to hear from the podium. Waits
+                for the chequered lower third to clear so they don't stack. */}
+            <AnimatePresence>
+              {chequeredAt != null &&
+                ui.t >= chequeredAt &&
+                !lowerThird &&
+                interviews?.status === "ok" &&
+                panel !== "interviews" &&
+                !promptDismissed && (
+                  <motion.div
+                    key="podium-prompt"
+                    className="absolute bottom-4 left-4 flex items-stretch overflow-hidden shadow-panel"
+                    initial={{ clipPath: "inset(0 100% 0 0)" }}
+                    animate={{ clipPath: "inset(0 0% 0 0)" }}
+                    exit={{ clipPath: "inset(0 0 0 100%)", transition: { duration: 0.3, ease: EASE.in } }}
+                    transition={{ duration: 0.5, ease: EASE.out }}
+                  >
+                    <span className="w-1 bg-sector-yellow" />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPanel("interviews");
+                        /* On phones the panel is below the map. */
+                        document.getElementById("replay-side")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+                      }}
+                      className="group flex items-center gap-3 bg-carbon-950/95 py-1.5 pl-3 pr-3 text-left"
+                    >
+                      <span>
+                        <span className="eyebrow block text-sector-yellow">After the flag</span>
+                        <span className="font-display text-base font-bold uppercase tracking-wide text-carbon-100">Hear from the podium</span>
+                      </span>
+                      <ChevronsRight size={16} className="text-carbon-400 transition-transform duration-micro group-hover:translate-x-0.5 group-hover:text-carbon-100" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPromptDismissed(true)}
+                      aria-label="Dismiss"
+                      className="bg-carbon-950/95 px-2 text-carbon-500 transition-colors duration-micro hover:text-carbon-100"
+                    >
+                      ×
+                    </button>
+                  </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* Lower third */}
+            <AnimatePresence>
+              {lowerThird && (
+                <motion.div
+                  key={lowerThird.key}
+                  className="pointer-events-none absolute bottom-4 left-4 flex items-stretch overflow-hidden shadow-panel"
+                  initial={{ clipPath: "inset(0 100% 0 0)" }}
+                  animate={{ clipPath: "inset(0 0% 0 0)" }}
+                  exit={{ clipPath: "inset(0 0 0 100%)", transition: { duration: 0.3, ease: EASE.in } }}
+                  transition={{ duration: 0.5, ease: EASE.out }}
+                >
+                  <span className="w-1" style={{ background: EVENT_COLOR[lowerThird.type] }} />
+                  <span className="bg-carbon-950/95 px-3 py-1.5">
+                    <span className="eyebrow block" style={{ color: EVENT_COLOR[lowerThird.type] }}>
+                      Lap {lowerThird.lap}
+                    </span>
+                    <span className="font-display text-base font-bold uppercase tracking-wide text-carbon-100">{lowerThird.label}</span>
+                  </span>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+
+          {/* Controls + timeline */}
+          <div className="border-t border-carbon-700 bg-carbon-850 px-3 pb-1 pt-2">
+            <div className="mb-1 flex flex-wrap items-center gap-1.5">
+              <motion.button
+                type="button"
+                whileTap={PRESS}
+                transition={SPRING.press}
+                onClick={togglePlay}
+                aria-label={ui.playing ? "Pause (space)" : "Play (space)"}
+                className="grid h-9 w-9 place-items-center rounded-row bg-f1red text-white transition-colors duration-micro hover:bg-f1red-bright"
+              >
+                {ui.playing ? <Pause size={16} /> : <Play size={16} className="translate-x-px" />}
+              </motion.button>
+              {[
+                { icon: ChevronsLeft, label: "Previous lap (←)", on: () => stepLap(-1) },
+                { icon: SkipBack, label: "Previous event (,)", on: () => stepEvent(-1) },
+                { icon: SkipForward, label: "Next event (.)", on: () => stepEvent(1) },
+                { icon: ChevronsRight, label: "Next lap (→)", on: () => stepLap(1) },
+              ].map(({ icon: Icon, label, on }) => (
+                <motion.button
+                  key={label}
+                  type="button"
+                  whileTap={PRESS}
+                  transition={SPRING.press}
+                  onClick={on}
+                  aria-label={label}
+                  title={label}
+                  className="grid h-9 w-8 place-items-center rounded-row border border-carbon-700 text-carbon-300 transition-colors duration-micro hover:border-carbon-600 hover:text-carbon-100"
+                >
+                  <Icon size={15} />
+                </motion.button>
+              ))}
+
+              <div className="ml-auto flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAutoRadio((v) => !v);
+                    if (autoRadio) radio.stop();
+                  }}
+                  aria-pressed={autoRadio}
+                  title={`Play team radio as it happens (at ${RADIO_MAX_SPEED}× and slower)`}
+                  className={`timing flex h-8 items-center gap-1.5 rounded-row border px-2 text-micro font-bold uppercase tracking-wider transition-colors duration-micro
+                    ${autoRadio ? "border-carbon-600 text-carbon-100" : "border-carbon-700 text-carbon-500 hover:text-carbon-300"}`}
+                >
+                  {autoRadio ? <Volume2 size={13} /> : <VolumeX size={13} />}
+                  Radio
+                </button>
+                <div className="flex rounded-row border border-carbon-700 bg-carbon-900 p-0.5" role="group" aria-label="Playback speed (↑/↓)">
+                  {SPEEDS.map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => setSpeed(s)}
+                      aria-pressed={ui.speed === s}
+                      title={s <= GPS_MAX_SPEED ? "Real GPS at this speed" : "Lap-timing placement at this speed"}
+                      className={`timing relative px-2 py-1 text-micro font-bold transition-colors duration-micro
+                        ${ui.speed === s ? "text-white" : s <= GPS_MAX_SPEED ? "text-carbon-300 hover:text-carbon-100" : "text-carbon-400 hover:text-carbon-100"}`}
+                    >
+                      {ui.speed === s && (
+                        <motion.span layoutId="replay-speed" transition={SPRING.panel} className="absolute inset-0 rounded-[3px] bg-carbon-600" />
+                      )}
+                      <span className="relative">{s}×</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <ReplayTimeline data={data} t={ui.t} from={tMin} to={tMax} onSeek={seek} onRadio={playRadio} playingUrl={radio.current?.url ?? null} />
+          </div>
+        </section>
+
+        {/* Side panel: race feed / podium interviews */}
+        <section
+          id="replay-side"
+          className="order-3 flex min-h-0 flex-col rounded-panel border border-carbon-700 bg-carbon-850 p-2 shadow-panel max-lg:h-[520px]"
+        >
+          <div className="mb-2 grid shrink-0 grid-cols-2 border-b border-carbon-700" role="tablist">
+            {(
+              [
+                ["feed", "Race feed"],
+                ["interviews", "Interviews"],
+              ] as const
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                role="tab"
+                aria-selected={panel === key}
+                onClick={() => setPanel(key)}
+                className={`timing relative pb-1.5 text-micro font-bold uppercase tracking-wider transition-colors duration-micro
+                  ${panel === key ? "text-carbon-100" : "text-carbon-400 hover:text-carbon-100"}`}
+              >
+                {label}
+                {key === "interviews" && interviews?.status === "ok" && (
+                  <span className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-sector-yellow align-middle" aria-label="available" />
+                )}
+                {panel === key && (
+                  <motion.span layoutId="replay-side-tab" transition={SPRING.panel} className="absolute inset-x-0 -bottom-px h-[2px] bg-f1red" />
+                )}
+              </button>
+            ))}
+          </div>
+          <div className="min-h-0 flex-1">
+            {panel === "feed" ? (
+              <EventFeed data={data} t={ui.t} onJump={jumpTo} playingUrl={radio.current?.url ?? null} />
+            ) : (
+              <Interviews data={data} interviews={interviews} />
+            )}
+          </div>
+        </section>
       </div>
+
+      <p className="timing mt-3 text-micro leading-relaxed text-carbon-400">
+        Space play/pause · ←/→ lap · ,/. event · ↑/↓ speed · click a driver to follow. Positions come from lap timing
+        mapped onto the circuit&apos;s real speed profile; at {GPS_MAX_SPEED}× and slower, cars switch to live GPS. Team
+        radio plays as it happens at {RADIO_MAX_SPEED}× and slower.
+      </p>
     </div>
+  );
+}
+
+/** Four bars bouncing out of phase — "someone is talking", not a real level meter. */
+function RadioBars({ color }: { color?: string }) {
+  return (
+    <span className="flex h-4 items-end gap-[2px]" aria-hidden>
+      {[0, 1, 2, 3].map((i) => (
+        <motion.span
+          key={i}
+          className="w-[3px]"
+          style={{ background: color ?? "#E7EAF0" }}
+          animate={{ height: ["30%", "100%", "45%", "85%", "30%"] }}
+          transition={{ duration: 0.9, repeat: Infinity, ease: "easeInOut", delay: i * 0.13 }}
+        />
+      ))}
+    </span>
   );
 }

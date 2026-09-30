@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { motion } from "framer-motion";
+import { motion, useScroll, useSpring } from "framer-motion";
 import { Home, BarChart3, Radio, Swords, Activity } from "lucide-react";
 import { FEATURES } from "@/services/features";
 import { SPRING, PRESS } from "@/lib/motion";
@@ -11,30 +11,49 @@ import { useCinematic } from "./RouteCinematic";
 const LINKS = [
   { href: "/", label: "Home", icon: Home },
   { href: "/telemetry", label: "Post-Race Telemetry", icon: BarChart3 },
-  { href: "/live", label: "Live Race", icon: Radio, pulse: true },
+  { href: "/live", label: "Race Replay", icon: Radio },
   { href: "/compare", label: "Head-to-Head", icon: Swords },
 ];
 
-/* Replay is shelved — the Live Race tab stays out of the nav until
-   FEATURES.raceReplay is flipped back on. */
+/* The replay tab is gated by FEATURES.raceReplay (services/features.js). */
 const VISIBLE_LINKS = LINKS.filter((l) => FEATURES.raceReplay || l.href !== "/live");
 
 /** Global navigation — sticky, carbon glass, pit-board red for the active tab. */
 export default function SiteNav() {
   const pathname = usePathname();
   const { play } = useCinematic();
+  /* Reading position on long boards, drawn into the nav's own bottom
+     border. Sprung so it glides with the scroll instead of stepping. */
+  const { scrollYProgress } = useScroll();
+  const progress = useSpring(scrollYProgress, { stiffness: 220, damping: 32, mass: 0.4 });
   return (
     <nav className="sticky top-0 z-50 border-b border-carbon-700 bg-carbon-950/85 backdrop-blur">
+      {/* The landing page never scrolls, so a stuck-at-zero bar would just
+          be a stray line there. */}
+      {pathname !== "/" && (
+        <motion.span
+          aria-hidden
+          style={{ scaleX: progress }}
+          className="absolute inset-x-0 -bottom-px h-px origin-left bg-f1red"
+        />
+      )}
       <div className="mx-auto flex max-w-7xl items-center gap-1.5 px-4 py-3.5 sm:px-6 2xl:max-w-[1440px]">
-        <Link href="/" className="mr-4 flex shrink-0 items-center gap-2">
-          <span className="grid h-9 w-9 place-items-center rounded-md bg-f1red font-display text-base font-black italic text-white">
-            F1
-          </span>
-          <span className="hidden font-display text-base font-bold uppercase tracking-wider md:block">
-            F1 <span className="text-f1red-bright">Telemetries</span>
+        <Link href="/" className="group mr-4 flex shrink-0 items-center gap-2.5" aria-label="F1 Telemetries — home">
+          {/* The mark carries "F1"; the wordmark beside it completes the name.
+              Plain <img>: a 33 KB static PNG gains nothing from next/image. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/f1-logo.png"
+            alt=""
+            width={812}
+            height={206}
+            className="h-5 w-auto transition-transform duration-micro ease-out-expo group-hover:-translate-y-px sm:h-6"
+          />
+          <span className="hidden font-display text-base font-bold uppercase tracking-wider text-carbon-100 md:block">
+            Telemetries
           </span>
         </Link>
-        {VISIBLE_LINKS.map(({ href, label, icon: Icon, pulse }) => {
+        {VISIBLE_LINKS.map(({ href, label, icon: Icon }) => {
           const active = pathname === href;
           return (
             <motion.div key={href} whileTap={PRESS} transition={SPRING.press}>
@@ -63,9 +82,6 @@ export default function SiteNav() {
                 )}
                 <Icon size={15} className="relative z-10" />
                 <span className="relative z-10 hidden sm:inline">{label}</span>
-                {pulse && !active && (
-                  <span className="absolute -right-0.5 -top-0.5 z-10 h-1.5 w-1.5 animate-pulse-dot rounded-full bg-f1red-bright" />
-                )}
               </Link>
             </motion.div>
           );

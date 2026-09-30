@@ -18,7 +18,7 @@ const FEED_LABELS: Record<string, string> = {
   trackOutline: "circuit map",
   compare: "head-to-head",
   events: "replay events",
-  radio: "team radio",
+  control: "race control",
 };
 
 /**
@@ -43,7 +43,8 @@ export default function MockDataBanner({ feed, only }: { feed?: any; only?: stri
   const full = feed.mode === "mock";
 
   return (
-    <div className="mb-4 flex items-start gap-3 rounded-xl border border-sector-yellow/50 bg-sector-yellow/10 px-4 py-3">
+    <div className="relative mb-4 flex items-start gap-3 overflow-hidden rounded-panel border border-sector-yellow/40 bg-sector-yellow/[0.06] px-4 py-3">
+      <span className="absolute inset-y-0 left-0 w-[3px] bg-sector-yellow" />
       <AlertTriangle size={16} className="mt-0.5 shrink-0 text-sector-yellow" />
       <div>
         <p className="timing text-xs font-bold uppercase tracking-wider text-sector-yellow">

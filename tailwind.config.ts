@@ -21,6 +21,7 @@ const config: Config = {
           800: "#161A22", // raised surface
           700: "#1E2430", // borders / grid lines
           600: "#2A3242", // strong borders
+          500: "#434D5E", // tertiary labels (was referenced but undefined)
           400: "#5B6678", // muted labels
           300: "#8B95A7", // secondary text
           100: "#E7EAF0", // primary text

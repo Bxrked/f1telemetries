@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceArea, ResponsiveContainer } from "recharts";
 import { GRID, TICK, AXIS_LINE } from "@/lib/chartTheme";
+import { useForceVisible } from "./MotionProvider";
 
 /**
  * Neutralisation windows derived from race control text.
@@ -47,13 +48,13 @@ function WormTooltip({ active, payload, label, colorFor }: any) {
   if (!active || !payload?.length) return null;
   const sorted = [...payload].sort((a, b) => a.value - b.value);
   return (
-    <div className="max-h-72 overflow-hidden rounded-lg border border-carbon-600 bg-carbon-900/95 px-3 py-2 shadow-panel backdrop-blur">
+    <div className="max-h-72 overflow-hidden rounded-row border border-carbon-600 bg-carbon-950/95 px-3 py-2 shadow-panel backdrop-blur">
       <p className="eyebrow mb-1.5">Lap {label}</p>
       <ul className="grid grid-flow-col grid-rows-[repeat(11,minmax(0,1fr))] gap-x-4 gap-y-0.5">
         {sorted.map((e) => (
           <li key={e.dataKey} className="timing flex items-center gap-1.5 text-[10px]">
             <span className="w-4 text-right text-carbon-400">{e.value}</span>
-            <span className="h-2 w-2 rounded-[2px]" style={{ background: colorFor(e.dataKey) }} />
+            <span className="h-2 w-[3px]" style={{ background: colorFor(e.dataKey) }} />
             <span className="font-bold text-carbon-100">{e.dataKey}</span>
           </li>
         ))}
@@ -70,6 +71,11 @@ function WormTooltip({ active, payload, label, colorFor }: any) {
 export default function PositionWormChart({ data, messages }: { data: any; messages?: any[] }) {
   const { rows, legend, maxLap } = data;
   const [focus, setFocus] = useState<string | null>(null);
+  /* Hovering a chip previews that driver without committing to it; a
+     click pins the focus. Hover wins while it lasts. */
+  const [peek, setPeek] = useState<string | null>(null);
+  const lit = peek ?? focus;
+  const forceVisible = useForceVisible();
   const scWindows = useMemo(() => neutralisations(messages ?? []), [messages]);
 
   const colorFor = useMemo(() => {
@@ -83,11 +89,12 @@ export default function PositionWormChart({ data, messages }: { data: any; messa
   return (
     <div>
       {/* Driver focus chips */}
-      <div className="mb-3 flex flex-wrap gap-1.5">
+      <div className="mb-3 flex flex-wrap gap-1" onMouseLeave={() => setPeek(null)}>
         <button
           onClick={() => setFocus(null)}
-          className={`timing rounded-md px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider transition
-            ${focus === null ? "bg-f1red text-white" : "border border-carbon-700 text-carbon-400 hover:text-carbon-100"}`}
+          className={`timing rounded-row border px-2 py-0.5 text-micro font-bold uppercase tracking-wider
+            transition-colors duration-micro ease-out-expo
+            ${focus === null ? "border-f1red bg-f1red text-white" : "border-carbon-700 text-carbon-400 hover:text-carbon-100"}`}
         >
           All
         </button>
@@ -95,13 +102,21 @@ export default function PositionWormChart({ data, messages }: { data: any; messa
           <button
             key={d.code}
             onClick={() => setFocus((f) => (f === d.code ? null : d.code))}
+            onMouseEnter={() => setPeek(d.code)}
+            onFocus={() => setPeek(d.code)}
+            onBlur={() => setPeek(null)}
             title={d.name}
-            className={`timing flex items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] font-bold transition
+            aria-pressed={focus === d.code}
+            style={{ ["--team" as any]: d.teamColor }}
+            className={`timing flex items-center gap-1.5 rounded-row border px-2 py-0.5 text-micro font-bold
+              transition-colors duration-micro ease-out-expo
               ${focus === d.code
-                ? "border-carbon-400 bg-carbon-800 text-carbon-100"
-                : "border-carbon-700 text-carbon-400 hover:text-carbon-100"}`}
+                ? "border-[var(--team)] bg-[color-mix(in_srgb,var(--team)_16%,transparent)] text-carbon-100"
+                : lit && lit !== d.code
+                  ? "border-carbon-800 text-carbon-500"
+                  : "border-carbon-700 text-carbon-300 hover:border-carbon-600 hover:text-carbon-100"}`}
           >
-            <span className="h-1.5 w-1.5 rounded-full" style={{ background: d.teamColor }} />
+            <span className="h-2 w-[3px]" style={{ background: d.teamColor }} />
             {d.code}
           </button>
         ))}
@@ -151,18 +166,22 @@ export default function PositionWormChart({ data, messages }: { data: any; messa
             ))}
             <Tooltip content={<WormTooltip colorFor={colorFor} />} />
             {legend.map((d: any) => {
-              const dimmed = focus !== null && focus !== d.code;
+              const dimmed = lit !== null && lit !== d.code;
               return (
                 <Line
                   key={d.code}
                   type="stepAfter"
                   dataKey={d.code}
                   stroke={d.teamColor}
-                  strokeWidth={focus === d.code ? 2.5 : 1.5}
-                  strokeOpacity={dimmed ? 0.12 : 0.95}
+                  strokeWidth={lit === d.code ? 2.75 : 1.5}
+                  strokeOpacity={dimmed ? 0.1 : 0.95}
                   dot={false}
                   activeDot={dimmed ? false : { r: 3, strokeWidth: 0 }}
-                  isAnimationActive={false}
+                  /* The race unrolls left to right once on arrival —
+                     the chart's own reading direction. */
+                  isAnimationActive={!forceVisible}
+                  animationDuration={1400}
+                  animationEasing="ease-out"
                 />
               );
             })}
@@ -170,7 +189,7 @@ export default function PositionWormChart({ data, messages }: { data: any; messa
         </ResponsiveContainer>
       </div>
 
-      <p className="timing mt-1 text-right text-[10px] text-carbon-400">
+      <p className="timing mt-1 text-right text-micro text-carbon-400">
         {fieldSize} drivers · {maxLap} laps · lines end where drivers retired
       </p>
     </div>

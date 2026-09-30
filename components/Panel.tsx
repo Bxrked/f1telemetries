@@ -2,7 +2,12 @@
 
 import { ReactNode } from "react";
 import { motion } from "framer-motion";
-import { panelReveal, VIEWPORT } from "@/lib/motion";
+import { panelReveal, VIEWPORT, EASE } from "@/lib/motion";
+
+const notchDraw = {
+  hidden: { scaleY: 0 },
+  show: { scaleY: 1, transition: { duration: 0.45, ease: EASE.out, delay: 0.2 } },
+};
 import { useForceVisible } from "./MotionProvider";
 
 interface PanelProps {
@@ -44,9 +49,11 @@ export default function Panel({ eyebrow, title, action, children, className = ""
         ${fill ? "flex flex-col" : ""}
         ${isDemo ? "border-sector-yellow/40" : "border-carbon-700 hover:border-carbon-600"} ${className}`}
     >
-      {/* Notch — yellow when this panel is showing demo data */}
-      <span
-        className={`absolute left-0 top-4 h-7 w-[2px] rounded-r ${isDemo ? "bg-sector-yellow" : "bg-f1red"}`}
+      {/* Notch — yellow when this panel is showing demo data. Draws down
+          just after the panel lands, so the reveal has a second beat. */}
+      <motion.span
+        variants={notchDraw}
+        className={`absolute left-0 top-3 h-8 w-[2px] origin-top ${isDemo ? "bg-sector-yellow" : "bg-f1red"}`}
       />
       {/* Padding follows the data-dense dashboard spec (8–12px, not 20).
           Airy cards are the single biggest reason a data board reads as

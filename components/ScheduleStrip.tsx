@@ -1,110 +1,167 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { CalendarDays, Timer } from "lucide-react";
-
-const pad = (n: number) => String(n).padStart(2, "0");
-
-function useCountdown(targetIso?: string) {
-  const [remaining, setRemaining] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!targetIso) return;
-    const tick = () => {
-      const ms = new Date(targetIso).getTime() - Date.now();
-      if (ms <= 0) {
-        setRemaining("LIGHTS OUT");
-        return;
-      }
-      const d = Math.floor(ms / 86_400_000);
-      const h = Math.floor((ms % 86_400_000) / 3_600_000);
-      const m = Math.floor((ms % 3_600_000) / 60_000);
-      const s = Math.floor((ms % 60_000) / 1_000);
-      setRemaining(`${d}d ${pad(h)}:${pad(m)}:${pad(s)}`);
-    };
-    tick();
-    const id = setInterval(tick, 1_000);
-    return () => clearInterval(id);
-  }, [targetIso]);
-
-  return remaining;
-}
+import { useEffect, useRef } from "react";
+import { motion } from "framer-motion";
+import { useCountdown, pad } from "@/lib/useCountdown";
+import { EASE, rowReveal } from "@/lib/motion";
+import { useForceVisible } from "./MotionProvider";
+import RollingDigits from "./RollingDigits";
 
 const fmtDate = (iso: string) =>
   new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
 
+/** One segment of the countdown: rolling value over a unit label. */
+function Segment({ value, unit }: { value: string; unit: string }) {
+  return (
+    <span className="flex flex-col items-center">
+      <RollingDigits
+        text={value}
+        className="timing text-2xl font-bold leading-none text-carbon-100 sm:text-3xl"
+      />
+      <span className="timing mt-1 text-micro uppercase tracking-[0.2em] text-carbon-400">{unit}</span>
+    </span>
+  );
+}
+
 /**
- * Season calendar strip: past rounds greyed with winner, latest completed
- * ringed in red, next round highlighted with a live countdown, rest dim.
+ * Season calendar: next-race countdown, season progress, and the round
+ * strip. Past rounds recede, the latest result is marked red, the next
+ * round green. The strip opens scrolled to where the season actually is,
+ * rather than at round 1.
  */
 export default function ScheduleStrip({ schedule }: { schedule: any }) {
   const { rounds, latest, nextRace } = schedule;
-  const countdown = useCountdown(nextRace?.date);
+  const left = useCountdown(nextRace?.date);
+  const stripRef = useRef<HTMLDivElement>(null);
+  const forceVisible = useForceVisible();
+
+  const done = rounds.filter((r: any) => r.status === "completed").length;
+  const total = rounds.length;
+
+  /* Park the strip on the latest round. scrollLeft on the strip itself,
+     not scrollIntoView — that would also scroll the page vertically. */
+  useEffect(() => {
+    const el = stripRef.current;
+    const target = el?.querySelector<HTMLElement>("[data-anchor]");
+    if (!el || !target) return;
+    el.scrollTo({ left: Math.max(0, target.offsetLeft - el.clientWidth / 3), behavior: "smooth" });
+  }, []);
 
   return (
     <div>
-      {/* Next-race countdown banner */}
-      {nextRace && (
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-f1red/40 bg-f1red/10 px-4 py-2.5">
-          <span className="flex items-center gap-2 text-xs text-carbon-300">
-            <Timer size={14} className="text-f1red-bright" />
-            Next race · <span className="font-bold text-carbon-100">{nextRace.gp}</span>
-            <span className="hidden text-carbon-400 sm:inline">— {nextRace.circuit}</span>
-          </span>
-          <span
-            className="timing text-lg font-bold tracking-wider text-f1red-bright"
-            aria-live="polite"
-          >
-            {countdown ?? "—"}
-          </span>
-        </div>
-      )}
+      <div className="mb-3 grid gap-3 lg:grid-cols-[1fr_auto]">
+        {/* Next race + countdown */}
+        {nextRace && (
+          <div className="relative flex flex-wrap items-center justify-between gap-x-6 gap-y-3 overflow-hidden rounded-row border border-carbon-700 bg-carbon-900/70 py-3 pl-4 pr-5">
+            <span className="absolute inset-y-0 left-0 w-[3px] bg-sector-green" />
+            <div className="min-w-0">
+              <p className="eyebrow">Next · Round {nextRace.round}</p>
+              <p className="mt-0.5 truncate font-display text-xl font-bold uppercase leading-tight tracking-wide text-carbon-100">
+                {nextRace.gp}
+              </p>
+              <p className="truncate text-data text-carbon-400">
+                {nextRace.circuit} · {fmtDate(nextRace.date)}
+              </p>
+            </div>
+            <div className="flex items-start gap-3 sm:gap-4" aria-live="off">
+              {left?.done ? (
+                <span className="timing text-2xl font-bold text-f1red-bright">LIGHTS OUT</span>
+              ) : (
+                <>
+                  <Segment value={left ? String(left.d) : "–"} unit="days" />
+                  <span className="timing text-2xl leading-none text-carbon-600 sm:text-3xl">:</span>
+                  <Segment value={left ? pad(left.h) : "––"} unit="hrs" />
+                  <span className="timing text-2xl leading-none text-carbon-600 sm:text-3xl">:</span>
+                  <Segment value={left ? pad(left.m) : "––"} unit="min" />
+                  <span className="timing text-2xl leading-none text-carbon-600 sm:text-3xl">:</span>
+                  <Segment value={left ? pad(left.s) : "––"} unit="sec" />
+                </>
+              )}
+            </div>
+          </div>
+        )}
 
-      {/* Scrollable round strip */}
-      <div className="flex gap-2 overflow-x-auto pb-1">
-        {rounds.map((r: any) => {
+        {/* Season progress */}
+        <div className="flex min-w-[220px] flex-col justify-center rounded-row border border-carbon-700 bg-carbon-900/70 px-4 py-3">
+          <div className="flex items-baseline justify-between gap-4">
+            <p className="eyebrow">Season progress</p>
+            <p className="timing text-label font-bold text-carbon-100">
+              {done}
+              <span className="text-carbon-400"> / {total}</span>
+            </p>
+          </div>
+          {/* One tick per round, filled as the season runs. Discrete, because
+              a season is counted in races, not a continuous percentage. */}
+          <div className="mt-2 flex gap-[2px]">
+            {rounds.map((r: any, i: number) => (
+              <motion.span
+                key={r.round}
+                className={`h-2 flex-1 origin-bottom ${
+                  r.status === "completed"
+                    ? latest && r.round === latest.round
+                      ? "bg-f1red"
+                      : "bg-carbon-300"
+                    : nextRace && r.round === nextRace.round
+                      ? "bg-sector-green"
+                      : "bg-carbon-700"
+                }`}
+                initial={forceVisible ? false : { scaleY: 0 }}
+                animate={{ scaleY: 1 }}
+                transition={{ duration: 0.35, ease: EASE.out, delay: 0.2 + i * 0.025 }}
+              />
+            ))}
+          </div>
+          <p className="timing mt-1.5 text-micro text-carbon-400">
+            {total - done} race{total - done === 1 ? "" : "s"} remaining
+          </p>
+        </div>
+      </div>
+
+      {/* Round strip */}
+      <div ref={stripRef} className="relative flex gap-1.5 overflow-x-auto pb-1.5">
+        {rounds.map((r: any, i: number) => {
           const isLatest = latest && r.round === latest.round;
           const isNext = nextRace && r.round === nextRace.round;
           const past = r.status === "completed";
           return (
-            <div
+            <motion.div
               key={r.round}
+              custom={i}
+              variants={rowReveal}
+              initial={forceVisible ? false : "hidden"}
+              animate="show"
+              data-anchor={isLatest ? "" : undefined}
               title={`${r.gp} · ${r.circuit}`}
-              className={`min-w-[104px] shrink-0 rounded-lg border px-3 py-2 transition-colors duration-200
-                ${isLatest ? "border-f1red bg-f1red/10" : ""}
-                ${isNext ? "border-sector-green/60 bg-sector-green/5" : ""}
-                ${!isLatest && !isNext ? "border-carbon-700 bg-carbon-900/60" : ""}
-                ${past && !isLatest ? "opacity-55" : ""}
-                hover:border-carbon-400`}
+              className={`group relative min-w-[96px] shrink-0 overflow-hidden rounded-row border px-2.5 pb-2 pt-2.5
+                transition-colors duration-micro ease-out-expo
+                ${isLatest ? "border-f1red/60 bg-f1red/[0.07]" : isNext ? "border-sector-green/50 bg-sector-green/[0.05]" : "border-carbon-700 bg-carbon-900/50 hover:border-carbon-600 hover:bg-carbon-800/60"}`}
             >
+              {/* Status rule along the top edge */}
+              <span
+                className={`absolute inset-x-0 top-0 h-[2px] ${isLatest ? "bg-f1red" : isNext ? "bg-sector-green" : past ? "bg-carbon-600" : "bg-transparent"}`}
+              />
               <div className="flex items-center justify-between">
-                <span className="eyebrow">R{r.round}</span>
-                {isLatest && (
-                  <span className="timing rounded bg-f1red px-1 py-px text-[8px] font-bold text-white">
-                    LATEST
-                  </span>
-                )}
-                {isNext && (
-                  <span className="timing rounded bg-sector-green/20 px-1 py-px text-[8px] font-bold text-sector-green">
-                    NEXT
-                  </span>
-                )}
+                <span className="timing text-micro text-carbon-400">R{pad(r.round)}</span>
+                {isLatest && <span className="timing text-micro font-bold text-f1red-bright">LATEST</span>}
+                {isNext && <span className="timing text-micro font-bold text-sector-green">NEXT</span>}
               </div>
-              <p className="mt-0.5 truncate font-display text-xs font-bold uppercase">{r.country}</p>
-              <p className="timing text-[10px] text-carbon-400">{fmtDate(r.date)}</p>
-              <p className="timing mt-0.5 text-[10px]">
+              <p
+                className={`mt-1 font-display text-sm font-bold uppercase leading-none tracking-wide ${past && !isLatest ? "text-carbon-300" : "text-carbon-100"}`}
+              >
+                {r.country}
+              </p>
+              <p className="timing mt-1 text-micro text-carbon-400">{fmtDate(r.date)}</p>
+              <p className="timing mt-1.5 flex items-center gap-1 text-micro">
                 {past ? (
                   <>
-                    <span className="text-carbon-400">🏆 </span>
+                    <span className="text-carbon-500">P1</span>
                     <span className="font-bold text-carbon-100">{r.winner ?? "—"}</span>
                   </>
                 ) : (
-                  <span className="flex items-center gap-1 text-carbon-400">
-                    <CalendarDays size={9} /> Upcoming
-                  </span>
+                  <span className="text-carbon-500">—</span>
                 )}
               </p>
-            </div>
+            </motion.div>
           );
         })}
       </div>

@@ -116,7 +116,7 @@ function lsSet(url, expires, data) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function doFetch(url, ttl, timeout) {
+async function doFetch(url, ttl, timeout, store) {
   const host = hostOf(url);
   const MAX_ATTEMPTS = 4;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -139,9 +139,11 @@ async function doFetch(url, ttl, timeout) {
         }
       } else {
         const data = await res.json();
-        const expires = Date.now() + ttl;
-        memory.set(url, { expires, data });
-        lsSet(url, expires, data);
+        if (store) {
+          const expires = Date.now() + ttl;
+          memory.set(url, { expires, data });
+          lsSet(url, expires, data);
+        }
         return data;
       }
     } catch (err) {
@@ -160,7 +162,12 @@ async function doFetch(url, ttl, timeout) {
   throw new Error(`retries exhausted — ${url}`);
 }
 
-export async function fetchJson(url, { ttl = 60_000, timeout = 10_000 } = {}) {
+/**
+ * `store: false` skips both cache tiers (still rate-limited and deduped).
+ * For bulk streams the caller manages itself — replay GPS is ~1 MB per
+ * lap, and caching a whole race here would pin ~60 MB in memory.
+ */
+export async function fetchJson(url, { ttl = 60_000, timeout = 10_000, store = true } = {}) {
   const hit = memory.get(url);
   if (hit && hit.expires > Date.now()) return hit.data;
 
@@ -171,7 +178,7 @@ export async function fetchJson(url, { ttl = 60_000, timeout = 10_000 } = {}) {
   }
 
   if (inflight.has(url)) return inflight.get(url);
-  const p = doFetch(url, ttl, timeout).finally(() => inflight.delete(url));
+  const p = doFetch(url, ttl, timeout, store).finally(() => inflight.delete(url));
   inflight.set(url, p);
   return p;
 }

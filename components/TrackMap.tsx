@@ -1,8 +1,19 @@
 "use client";
 
 import { useState } from "react";
+import { motion } from "framer-motion";
 import { Flag, Satellite, Info, MapPinned } from "lucide-react";
 import { tracePath } from "@/services/format";
+import { EASE } from "@/lib/motion";
+import { useForceVisible } from "./MotionProvider";
+
+type SectorKey = "s1" | "s2" | "s3";
+
+/* The lap draws in sector order, each sector picking up where the last
+   ended, so the reveal traces the circuit the way a car drives it. */
+const DRAW = { s1: 0.15, s2: 0.75, s3: 1.35 } as const;
+const DRAW_DUR = 0.65;
+const LAP_DRAWN = DRAW.s3 + DRAW_DUR;
 
 const SECTOR_COLORS = { s1: "#E10600", s2: "#3B9BFF", s3: "#FFD644" };
 
@@ -29,14 +40,25 @@ const MONACO_CORNERS = [
    straight line across the circuit where data is missing. */
 const toPath = (pts: number[][]) => (pts.length ? tracePath(pts) : "");
 
-function SectorLegend() {
+/** Legend doubles as the sector picker: hover or focus isolates a sector. */
+function SectorLegend({ active, onPick }: { active: SectorKey | null; onPick: (s: SectorKey | null) => void }) {
   return (
-    <div className="flex gap-4">
+    <div className="flex gap-1" onMouseLeave={() => onPick(null)}>
       {(["s1", "s2", "s3"] as const).map((s, i) => (
-        <span key={s} className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-carbon-300">
-          <span className="h-1.5 w-4 rounded-full" style={{ background: SECTOR_COLORS[s] }} />
+        <button
+          key={s}
+          type="button"
+          onMouseEnter={() => onPick(s)}
+          onFocus={() => onPick(s)}
+          onBlur={() => onPick(null)}
+          aria-pressed={active === s}
+          className={`timing flex items-center gap-1.5 rounded-row px-2 py-1 text-micro uppercase tracking-wider
+            transition-colors duration-micro ease-out-expo
+            ${active === s ? "bg-carbon-800 text-carbon-100" : active ? "text-carbon-500" : "text-carbon-300 hover:text-carbon-100"}`}
+        >
+          <span className="h-[3px] w-4" style={{ background: SECTOR_COLORS[s] }} />
           Sector {i + 1}
-        </span>
+        </button>
       ))}
     </div>
   );
@@ -51,6 +73,8 @@ function SectorLegend() {
  */
 export default function TrackMap({ circuitName, outline }: { circuitName?: string; outline?: any }) {
   const [hovered, setHovered] = useState<(typeof MONACO_CORNERS)[number] | null>(null);
+  const [sector, setSector] = useState<SectorKey | null>(null);
+  const forceVisible = useForceVisible();
 
   const live = !!outline?.sectors;
   const isMonaco = /monaco|monte carlo/i.test(circuitName ?? "Monaco");
@@ -124,30 +148,45 @@ export default function TrackMap({ circuitName, outline }: { circuitName?: strin
         {/* Tarmac base */}
         <path d={fullPath} fill="none" stroke="#1E2430" strokeWidth="14" strokeLinecap="round" strokeLinejoin="round" />
 
-        {/* Sector overlays */}
-        {(Object.keys(sectorPaths) as Array<keyof typeof sectorPaths>).map((key) => (
-          <path
+        {/* Sector overlays — drawn in lap order on arrival */}
+        {(Object.keys(sectorPaths) as SectorKey[]).map((key) => (
+          <motion.path
             key={key}
             d={sectorPaths[key]}
             fill="none"
             stroke={SECTOR_COLORS[key]}
-            strokeWidth="4.5"
             strokeLinecap="round"
             strokeLinejoin="round"
             filter="url(#trackGlow)"
-            opacity="0.9"
+            initial={forceVisible ? false : { pathLength: 0 }}
+            animate={{
+              pathLength: 1,
+              opacity: sector && sector !== key ? 0.12 : 0.92,
+              strokeWidth: sector === key ? 6.5 : 4.5,
+            }}
+            transition={{
+              pathLength: { duration: DRAW_DUR, ease: EASE.out, delay: DRAW[key] },
+              opacity: { duration: 0.2 },
+              strokeWidth: { duration: 0.2 },
+            }}
           />
         ))}
 
         {/* Start / finish marker */}
         <circle cx={start[0]} cy={start[1]} r="5" fill="none" stroke="#E7EAF0" strokeWidth="2" strokeDasharray="2 2" />
 
-        {/* Animated car dot lapping the circuit */}
-        <circle r="5" fill="#FF1E00" filter="url(#trackGlow)">
-          <animateMotion dur="16s" repeatCount="indefinite" rotate="auto">
-            <mpath href="#lapPath" />
-          </animateMotion>
-        </circle>
+        {/* Car dot lapping the circuit — joins once the lap has been drawn */}
+        <motion.g
+          initial={forceVisible ? false : { opacity: 0 }}
+          animate={{ opacity: sector ? 0.25 : 1 }}
+          transition={{ duration: 0.4, delay: sector ? 0 : forceVisible ? 0 : LAP_DRAWN }}
+        >
+          <circle r="5" fill="#FF1E00" filter="url(#trackGlow)">
+            <animateMotion dur="16s" repeatCount="indefinite" rotate="auto">
+              <mpath href="#lapPath" />
+            </animateMotion>
+          </circle>
+        </motion.g>
 
         {/* Corner markers — Monaco fallback only */}
         {showCorners &&
@@ -173,11 +212,11 @@ export default function TrackMap({ circuitName, outline }: { circuitName?: strin
       </svg>
 
       {/* Readout bar — fixed slot so the layout never jumps */}
-      <div className="mt-2 flex min-h-[44px] items-center justify-between gap-3 rounded-lg border border-carbon-700 bg-carbon-900/70 px-4 py-2">
+      <div className="mt-2 flex min-h-[44px] flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-row border border-carbon-700 bg-carbon-900/70 py-1.5 pl-3 pr-1.5">
         {showCorners && hovered ? (
           <>
             <div className="flex items-center gap-3">
-              <span className="timing rounded bg-f1red/15 px-2 py-0.5 text-xs font-bold text-f1red-bright">
+              <span className="timing rounded-row bg-f1red/15 px-2 py-0.5 text-xs font-bold text-f1red-bright">
                 T{hovered.id}
               </span>
               <span className="font-display text-sm font-bold uppercase tracking-wide">{hovered.name}</span>
@@ -211,7 +250,7 @@ export default function TrackMap({ circuitName, outline }: { circuitName?: strin
                 </>
               )}
             </span>
-            <SectorLegend />
+            <SectorLegend active={sector} onPick={setSector} />
           </>
         )}
       </div>

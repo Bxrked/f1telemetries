@@ -8,29 +8,9 @@ import { getSeasonSchedule } from "@/services/f1Service";
 import { FEATURES } from "@/services/features";
 import { DUR, EASE, SPRING, PRESS, rowDelay } from "@/lib/motion";
 import CarHero from "./CarHero";
+import RollingDigits from "./RollingDigits";
+import { useCountdown, formatCountdown } from "@/lib/useCountdown";
 import { useCinematic, ZOOM_OUT_KEY } from "./RouteCinematic";
-
-const pad = (n: number) => String(n).padStart(2, "0");
-
-function useCountdown(targetIso?: string) {
-  const [remaining, setRemaining] = useState<string | null>(null);
-  useEffect(() => {
-    if (!targetIso) return;
-    const tick = () => {
-      const ms = new Date(targetIso).getTime() - Date.now();
-      if (ms <= 0) return setRemaining("LIGHTS OUT");
-      const d = Math.floor(ms / 86_400_000);
-      const h = Math.floor((ms % 86_400_000) / 3_600_000);
-      const m = Math.floor((ms % 3_600_000) / 60_000);
-      const s = Math.floor((ms % 60_000) / 1_000);
-      setRemaining(`${d}d ${pad(h)}:${pad(m)}:${pad(s)}`);
-    };
-    tick();
-    const id = setInterval(tick, 1_000);
-    return () => clearInterval(id);
-  }, [targetIso]);
-  return remaining;
-}
 
 const SECTIONS = [
   {
@@ -43,8 +23,8 @@ const SECTIONS = [
   {
     href: "/live",
     icon: Radio,
-    title: "Live Race",
-    desc: "Broadcast race map with running order and gaps.",
+    title: "Race Replay",
+    desc: "The latest race, every lap: safety cars, overtakes, pit stops.",
     part: "Sidepod",
   },
   {
@@ -90,7 +70,7 @@ export default function HomeLanding() {
   useEffect(() => {
     getSeasonSchedule().then(setSchedule).catch(() => {});
   }, []);
-  const countdown = useCountdown(schedule?.nextRace?.date);
+  const left = useCountdown(schedule?.nextRace?.date);
 
   const chrome = { opacity: zoom ? 0 : 1 };
   const chromeT = { duration: zoom ? 0.35 : 0.5, ease: zoom ? EASE.in : EASE.out };
@@ -175,9 +155,10 @@ export default function HomeLanding() {
             <span className="flex items-baseline gap-2">
               <span className="eyebrow">Next</span>
               <span className="text-label font-bold text-carbon-100">{schedule.nextRace.gp}</span>
-              <span className="timing text-label font-bold tabular-nums text-f1red-bright">
-                {countdown ?? "—"}
-              </span>
+              <RollingDigits
+                text={left ? formatCountdown(left) : "—"}
+                className="timing text-label font-bold text-f1red-bright"
+              />
             </span>
           )}
           {schedule?.latest && (

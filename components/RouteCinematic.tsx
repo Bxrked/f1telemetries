@@ -40,7 +40,7 @@ export const CAR_FOCUS: Record<string, { origin: string; part: string; label: st
   /* Cockpit opening under the halo — image y 50% (crop keeps centre at centre) */
   "/compare": { origin: "58% 50%", part: "Cockpit", label: "Head-to-Head" },
   /* Sidepod inlet, ahead of the rear tyre — image y 58% */
-  "/live": { origin: "42% 60.9%", part: "Sidepod", label: "Live Race" },
+  "/live": { origin: "42% 60.9%", part: "Sidepod", label: "Race Replay" },
 };
 
 /** Where the camera should pull back FROM when arriving at "/". */

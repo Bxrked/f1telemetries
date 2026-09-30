@@ -4,7 +4,7 @@ import {
   BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from "recharts";
 import ChartTooltip from "./ChartTooltip";
-import { GRID, TICK, TICK_CATEGORY, AXIS_LINE, CURSOR } from "@/lib/chartTheme";
+import { GRID, TICK, TICK_CATEGORY, AXIS_LINE, CURSOR, BAR } from "@/lib/chartTheme";
 import { formatLapTime, formatSector } from "@/services/format";
 
 const SECTOR_HEX: Record<string, string> = {
@@ -71,7 +71,7 @@ export default function SectorChart({ data }: { data: any }) {
                         />
                       }
                     />
-                    <Bar dataKey={key} name={`Sector ${n}`} radius={[3, 3, 0, 0]} maxBarSize={22}>
+                    <Bar dataKey={key} name={`Sector ${n}`} radius={BAR.radiusV} maxBarSize={22} animationDuration={600} animationBegin={n * 120} animationEasing="ease-out">
                       {rows.map((row: any) => (
                         <Cell key={row.code} fill={SECTOR_HEX[row[classKey]]} fillOpacity={0.92} />
                       ))}
@@ -85,20 +85,20 @@ export default function SectorChart({ data }: { data: any }) {
       </div>
 
       {/* Legend + theoretical best lap */}
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-carbon-700 bg-carbon-900/60 px-3 py-2">
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-row border border-carbon-700 bg-carbon-900/60 px-3 py-2">
         <div className="flex gap-4">
           {[
             ["purple", "Overall fastest"],
             ["green", "Personal best"],
             ["yellow", "Slower"],
           ].map(([key, label]) => (
-            <span key={key} className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-carbon-300">
-              <span className="h-2 w-2 rounded-sm" style={{ background: SECTOR_HEX[key] }} />
+            <span key={key} className="flex items-center gap-1.5 text-micro uppercase tracking-wider text-carbon-300">
+              <span className="h-2 w-[3px]" style={{ background: SECTOR_HEX[key] }} />
               {label}
             </span>
           ))}
         </div>
-        <p className="timing text-[11px] text-carbon-300">
+        <p className="timing text-data text-carbon-300">
           Ideal lap{" "}
           <span className="font-bold text-sector-purple">{formatLapTime(idealLap)}</span>
         </p>
@@ -123,10 +123,10 @@ export default function SectorChart({ data }: { data: any }) {
             />
           ))}
         </div>
-        <div className="timing mt-1 flex justify-between text-[10px] text-carbon-400">
-          <span><span className="text-sector-purple">■</span> {miniSectors.driverA}</span>
+        <div className="timing mt-1 flex justify-between text-micro text-carbon-400">
+          <span className="flex items-center gap-1.5"><span className="h-2 w-[3px] bg-sector-purple" /> {miniSectors.driverA}</span>
           <span>{miniSectors.subtitle ?? "18 micro-splits"}</span>
-          <span><span className="text-sector-green">■</span> {miniSectors.driverB}</span>
+          <span className="flex items-center gap-1.5">{miniSectors.driverB} <span className="h-2 w-[3px] bg-sector-green" /></span>
         </div>
       </div>
     </div>

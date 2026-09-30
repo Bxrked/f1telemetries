@@ -15,6 +15,12 @@
 
 import { USE_LIVE_DATA, SEASON, JOLPICA_BASE, OPENF1_BASE, TTL } from "./config";
 import { fetchJson } from "./apiClient";
+import { formatLapTime } from "./format";
+import { teamColorFor } from "./teamColors";
+import { fiaRaceSlug, fiaTranscriptUrl } from "./fiaTranscript";
+import {
+  buildReference, buildDriverLaps, createTimeline, buildTrackStatus, detectOvertakes, isPenalty,
+} from "./replayModel";
 
 /* ================================================================
  * FEED STATUS + FALLBACK WRAPPER
@@ -50,21 +56,8 @@ export function getFeedStatus() {
  * (colours / circuit facts aren't served by any API — curated here)
  * ================================================================ */
 
-const CONSTRUCTOR_COLORS = {
-  red_bull: "#3671C6",
-  ferrari: "#E8002D",
-  mclaren: "#FF8000",
-  mercedes: "#27F4D2",
-  aston_martin: "#229971",
-  williams: "#64C4FF",
-  alpine: "#0093CC",
-  sauber: "#52E252",
-  audi: "#52E252",
-  rb: "#6692FF",
-  racing_bulls: "#6692FF",
-  haas: "#B6BABD",
-};
-const teamColor = (constructorId) => CONSTRUCTOR_COLORS[constructorId] ?? "#8B95A7";
+/* Team colours live in teamColors.js so every surface agrees. */
+const teamColor = (constructorId) => teamColorFor(constructorId);
 
 const COUNTRY_CODES = {
   Australia: "AUS", China: "CHN", Japan: "JPN", Bahrain: "BHR",
@@ -214,14 +207,14 @@ const simulateLatency = () =>
   new Promise((resolve) => setTimeout(resolve, SIMULATED_LATENCY_MS));
 
 export const TEAMS = {
-  RBR: { name: "Red Bull Racing", color: "#3671C6" },
-  FER: { name: "Ferrari", color: "#E8002D" },
-  MCL: { name: "McLaren", color: "#FF8000" },
-  MER: { name: "Mercedes", color: "#27F4D2" },
-  AST: { name: "Aston Martin", color: "#229971" },
-  WIL: { name: "Williams", color: "#64C4FF" },
-  ALP: { name: "Alpine", color: "#0093CC" },
-  SAU: { name: "Sauber", color: "#52E252" },
+  RBR: { name: "Red Bull Racing", color: teamColorFor("red_bull") },
+  FER: { name: "Ferrari", color: teamColorFor("ferrari") },
+  MCL: { name: "McLaren", color: teamColorFor("mclaren") },
+  MER: { name: "Mercedes", color: teamColorFor("mercedes") },
+  AST: { name: "Aston Martin", color: teamColorFor("aston_martin") },
+  WIL: { name: "Williams", color: teamColorFor("williams") },
+  ALP: { name: "Alpine", color: teamColorFor("alpine") },
+  SAU: { name: "Sauber", color: teamColorFor("sauber") },
 };
 
 const DRIVERS = [
@@ -863,7 +856,7 @@ async function openF1Drivers(sessionKey) {
       code: d.name_acronym ?? String(d.driver_number),
       name: d.full_name ?? d.broadcast_name ?? `#${d.driver_number}`,
       teamName: d.team_name ?? "—",
-      teamColor: d.team_colour ? `#${d.team_colour}` : "#8B95A7",
+      teamColor: teamColorFor(d.team_name, d.team_colour ? `#${d.team_colour}` : undefined),
     };
   });
   return map;
@@ -1253,29 +1246,18 @@ export async function getPositionWorm() {
 }
 
 /* ================================================================
- * RACE REPLAY (broadcast mode)
+ * RACE REPLAY
  * ----------------------------------------------------------------
- * Replays a completed race from historical OpenF1 data (free tier).
- * Location + interval data stream in time-window chunks so we never
- * fetch the full ~2M-point race in one request. True-live later =
- * same component, authenticated WebSocket source instead.
+ * The latest race, every lap, from historical OpenF1 data (free tier).
+ * Two sources, blended per car in the canvas:
+ *   LAP MODE  — the whole race from cached lap timing, placed on the
+ *               circuit via the reference lap's speed profile. Instant
+ *               load, instant scrubbing, zero extra requests.
+ *   GPS MODE  — real /location, one lap window at a time with the next
+ *               lap prefetched, at 5x and slower.
+ * Positions — outline, lap mode and GPS alike — go through
+ * projectToTrack() with the outline's transform, so none can drift.
  * ================================================================ */
-
-/**
- * Build a projection transform from world-coordinate bounds.
- * Used for BOTH the traced outline and the live car dots so the two can
- * never end up in different coordinate spaces (the cause of dots
- * appearing beside the circuit instead of on it).
- */
-export function buildTransform(minX, maxX, minY, maxY, view = { W: 660, H: 360, PAD: 30 }) {
-  const { W, H, PAD } = view;
-  const scale = Math.min((W - 2 * PAD) / (maxX - minX || 1), (H - 2 * PAD) / (maxY - minY || 1));
-  return {
-    minX, minY, scale, H,
-    ox: (W - (maxX - minX) * scale) / 2,
-    oy: (H - (maxY - minY) * scale) / 2,
-  };
-}
 
 /** Map OpenF1 world coordinates into the traced outline's SVG space. */
 export function projectToTrack(tf, x, y) {
@@ -1286,83 +1268,169 @@ export function projectToTrack(tf, x, y) {
 }
 
 /**
- * One-time replay context: session window, driver identities, and the
- * full position-change stream (small — rows only when order changes).
+ * Replay timeline — the whole race in LAP MODE, from data the dashboard
+ * has already cached (all laps, pits, stints, race control, positions)
+ * plus the circuit's reference lap. No GPS download: every car's
+ * position at any instant comes from its timing, time-warped onto the
+ * reference lap's speed profile (see services/replayModel.js).
+ * Measured against real GPS at Baku 2026: median 11 m along-track error
+ * under green flag. Run `node diag-replay.mjs` to re-check.
+ *
+ * Returns null on failure — the replay is live-data only.
  */
-export async function getReplayContext() {
+export async function getReplayTimeline() {
   return withFallback(
     "replay",
     async () => {
-      const race = await jolpicaLatestRaceResults();
-      const { sessionKey } = await resolveOpenF1Session(race);
-      const sessions = await fetchJson(`${OPENF1_BASE}/sessions?session_key=${sessionKey}`, { ttl: TTL.sessions });
-      const s = Array.isArray(sessions) ? sessions[0] : null;
-      if (!s?.date_start || !s?.date_end) throw new Error("no session time window");
-      const [drivers, positions, lap1] = await Promise.all([
+      const { race, sessionKey } = await openF1Context();
+      const [laps, drivers, trace, positions, pitRows, stintRows, rc, radioRows] = await Promise.all([
+        openF1AllLaps(sessionKey),
         openF1Drivers(sessionKey),
+        traceSessionCircuit(sessionKey, TTL.sessions),
         fetchJson(`${OPENF1_BASE}/position?session_key=${sessionKey}`, { ttl: TTL.results, timeout: 30_000 }),
-        fetchJson(`${OPENF1_BASE}/laps?session_key=${sessionKey}&lap_number=1`, { ttl: TTL.results }).catch(() => []),
+        fetchJson(`${OPENF1_BASE}/pit?session_key=${sessionKey}`, { ttl: TTL.results }).catch(() => []),
+        fetchJson(`${OPENF1_BASE}/stints?session_key=${sessionKey}`, { ttl: TTL.results }).catch(() => []),
+        fetchJson(`${OPENF1_BASE}/race_control?session_key=${sessionKey}`, { ttl: TTL.results }).catch(() => []),
+        fetchJson(`${OPENF1_BASE}/team_radio?session_key=${sessionKey}`, { ttl: TTL.results, timeout: 30_000 }).catch(() => []),
       ]);
-      if (!Array.isArray(positions) || !positions.length) throw new Error("no position stream");
-      const sorted = positions
-        .map((p) => ({ t: new Date(p.date).getTime(), n: p.driver_number, pos: p.position }))
-        .sort((a, b) => a.t - b.t);
-      /* Lights out ≈ earliest lap-1 start; skips formation dead time. */
-      const lapStarts = (Array.isArray(lap1) ? lap1 : [])
-        .map((l) => (l.date_start ? new Date(l.date_start).getTime() : null))
-        .filter(Boolean);
-      const sessionStart = new Date(s.date_start).getTime();
-      const raceStart = lapStarts.length ? Math.min(...lapStarts) : sessionStart;
-      /* Trim the tail: session date_end includes podium etc. */
-      const raceEnd = Math.min(
-        new Date(s.date_end).getTime(),
-        sorted[sorted.length - 1].t + 120_000
+
+      const reference = buildReference(trace.samples, trace.lap);
+      const driverLaps = buildDriverLaps(laps);
+
+      /* Classification from Jolpica: who took the flag, and why the rest
+         didn't. Keyed by car number, which both APIs share. */
+      const results = {};
+      race.Results.forEach((r) => {
+        const finished = r.status === "Finished" || /^\+\d+ Laps?$/.test(r.status) || r.status === "Lapped";
+        results[+r.number] = { finish: +r.position, grid: +r.grid, status: r.status, finished, millis: r.Time?.millis != null ? +r.Time.millis : null };
+      });
+      const finishers = new Set(
+        Object.keys(driverLaps).map(Number).filter((n) => results[n]?.finished)
       );
+
+      const pits = (Array.isArray(pitRows) ? pitRows : [])
+        .filter((p) => p.date && p.pit_duration > 0)
+        .map((p) => ({ num: p.driver_number, t: Date.parse(p.date), lane: +p.pit_duration, lap: p.lap_number }));
+
+      const grid = Object.fromEntries(Object.entries(results).map(([n, r]) => [n, r.grid]));
+      const classification = Object.fromEntries(Object.entries(results).map(([n, r]) => [n, { pos: r.finish, millis: r.millis }]));
+      const timeline = createTimeline({ reference, laps: driverLaps, finishers, pits, grid, classification });
+      const status = buildTrackStatus(rc, timeline.leaderStarts, timeline.raceEnd);
+
+      const stints = {};
+      (Array.isArray(stintRows) ? stintRows : []).forEach((s) => {
+        (stints[s.driver_number] ??= []).push({
+          compound: COMPOUND_ALIASES[s.compound] ?? s.compound ?? "UNKNOWN",
+          from: s.lap_start,
+          to: s.lap_end,
+        });
+      });
+      Object.values(stints).forEach((list) => list.sort((a, b) => (a.from ?? 0) - (b.from ?? 0)));
+
+      /* ---- Events ---- */
+      const code = (n) => drivers[n]?.code ?? String(n);
+      const ev = (t, type, label, nums = []) => ({ t, lap: timeline.lapAt(t), type, label, nums });
+      const events = [ev(timeline.raceStart, "start", "Lights out")];
+
+      const pitTimes = {};
+      pits.forEach((p) => (pitTimes[p.num] ??= []).push(p.t));
+      detectOvertakes(positions, { raceStart: timeline.raceStart, pitTimes, excludeDuring: status }).forEach((o) =>
+        events.push(ev(o.t, "overtake", `${code(o.nums[0])} passes ${code(o.nums[1])} for P${o.pos}`, o.nums))
+      );
+
+      const STATUS_LABEL = { sc: "Safety Car", vsc: "Virtual Safety Car", red: "Red flag" };
+      status.forEach((s) => {
+        events.push(ev(s.from, s.type, `${STATUS_LABEL[s.type]} deployed`));
+        if (s.to < timeline.raceEnd) {
+          events.push(ev(s.to, `${s.type}-end`, s.type === "red" ? "Session resumes" : `${STATUS_LABEL[s.type]} ends`));
+        }
+      });
+
+      pits.forEach((p) => {
+        const next = stints[p.num]?.find((st) => st.from === p.lap + 1);
+        events.push(
+          ev(p.t - p.lane * 1000, "pit", `${code(p.num)} pits${next ? ` · ${next.compound.toLowerCase()}s` : ""} · ${p.lane.toFixed(1)}s lane`, [p.num])
+        );
+      });
+
+      /* Fastest lap: each time the overall best improves, from lap 5 on
+         (before that every lap is a "fastest lap" as fuel burns off). */
+      const timed = laps
+        .filter((l) => l.date_start && l.lap_duration > 0 && !l.is_pit_out_lap && l.lap_number > 1)
+        .map((l) => ({ num: l.driver_number, n: l.lap_number, d: l.lap_duration, end: Date.parse(l.date_start) + l.lap_duration * 1000 }))
+        .sort((a, b) => a.end - b.end);
+      let bestLap = Infinity;
+      timed.forEach((l) => {
+        if (l.d >= bestLap) return;
+        bestLap = l.d;
+        if (l.n >= 5) events.push(ev(l.end, "fastest", `${code(l.num)} fastest lap · ${formatLapTime(l.d)}`, [l.num]));
+      });
+
+      timeline.nums
+        .filter((n) => !finishers.has(n))
+        .forEach((n) => {
+          const why = results[n]?.status;
+          events.push(ev(timeline.doneAt[n], "retired", `${code(n)} retires${why && why !== "Retired" ? ` · ${why.toLowerCase()}` : ""}`, [n]));
+        });
+
+      (Array.isArray(rc) ? rc : []).forEach((r) => {
+        const msg = (r.message ?? "").toUpperCase();
+        if (!r.date) return;
+        if (isPenalty(msg)) {
+          const who = r.driver_number ? code(r.driver_number) : null;
+          events.push(ev(Date.parse(r.date), "penalty", who ? `Penalty · ${who}` : "Penalty", r.driver_number ? [r.driver_number] : []));
+        }
+        if (r.flag === "CHEQUERED") {
+          const winner = Object.entries(results).find(([, v]) => v.finish === 1)?.[0];
+          events.push(ev(Date.parse(r.date), "chequered", `Chequered flag${winner ? ` · ${code(+winner)} wins` : ""}`, winner ? [+winner] : []));
+        }
+      });
+
+      /* Team radio: pit-wall AUDIO. OpenF1 ships no transcript, so a clip
+         is a sound to play, never a quote — don't invent text for it. */
+      const radio = (Array.isArray(radioRows) ? radioRows : [])
+        .filter((r) => r.date && r.recording_url)
+        .map((r) => ({ t: Date.parse(r.date), num: r.driver_number, url: r.recording_url }))
+        .sort((a, b) => a.t - b.t);
+      radio.forEach((r) => {
+        const e = ev(r.t, "radio", `${code(r.num)} team radio`, [r.num]);
+        e.url = r.url;
+        events.push(e);
+      });
+
+      events.sort((a, b) => a.t - b.t);
+
       return {
         sessionKey,
         raceName: race.raceName,
-        dateStart: s.date_start,
-        dateEnd: s.date_end,
-        raceStart,
-        raceEnd,
         drivers,
-        positions: sorted,
+        results,
+        timeline,
+        reference,
+        status,
+        events,
+        stints,
+        pits,
       };
     },
-    async () => null // replay is live-data only; component shows unavailable state
+    async () => null
   );
 }
 
 /**
- * One playback chunk: all drivers' locations + gap intervals inside
- * [fromMs, toMs). Cached per window, so scrubbing back is free.
+ * One GPS detail window for the whole field — NOT cached by fetchJson
+ * (~1 MB per lap); the replay's own buffer holds a few laps at a time.
  */
-export async function getReplayWindow(sessionKey, fromMs, toMs) {
+export function getReplayGpsWindow(sessionKey, fromMs, toMs) {
   const iso = (ms) => encodeURIComponent(new Date(ms).toISOString());
-  const [loc, intervals] = await Promise.all([
-    fetchJson(
-      `${OPENF1_BASE}/location?session_key=${sessionKey}&date>${iso(fromMs)}&date<${iso(toMs)}`,
-      { ttl: TTL.results, timeout: 30_000 }
-    ),
-    fetchJson(
-      `${OPENF1_BASE}/intervals?session_key=${sessionKey}&date>${iso(fromMs)}&date<${iso(toMs)}`,
-      { ttl: TTL.results, timeout: 30_000 }
-    ).catch(() => []), // gaps are decoration; a miss shouldn't kill the chunk
-  ]);
-  const locations = {};
-  (Array.isArray(loc) ? loc : []).forEach((p) => {
-    if (p.x == null || p.y == null) return;
-    (locations[p.driver_number] ??= []).push({ t: new Date(p.date).getTime(), x: p.x, y: p.y });
-  });
-  Object.values(locations).forEach((arr) => arr.sort((a, b) => a.t - b.t));
-  const gaps = (Array.isArray(intervals) ? intervals : [])
-    .map((i) => ({ t: new Date(i.date).getTime(), n: i.driver_number, gap: i.gap_to_leader }))
-    .sort((a, b) => a.t - b.t);
-  return { locations, gaps };
+  return fetchJson(
+    `${OPENF1_BASE}/location?session_key=${sessionKey}&date>${iso(fromMs)}&date<${iso(toMs)}`,
+    { timeout: 45_000, store: false }
+  );
 }
 
 /* ================================================================
- * REPLAY EVENTS + TEAM RADIO (broadcast enrichment)
+ * LAP LOOKUP (shared by the radio & race-control feed)
  * ================================================================ */
 
 /** lap-number lookup: leader's lap start boundaries → lap at time t. */
@@ -1388,146 +1456,13 @@ async function lapAtBuilder(sessionKey) {
   };
 }
 
-/**
- * Race events for the replay timeline:
- *  - OVERTAKES computed from the position stream. Honest heuristics:
- *    only ±1 swaps count (multi-place jumps = pit cycles), lap-1 chaos
- *    is collapsed into a single "Lights out" event, swaps within 35s
- *    of either car's pit stop are excluded, and repeat swaps of the
- *    same pair within 45s (DRS ping-pong) are merged.
- *  - INCIDENTS from race control: SC / VSC / red flag / penalties.
- */
-export async function getReplayEvents() {
-  return withFallback(
-    "events",
-    async () => {
-      const race = await jolpicaLatestRaceResults();
-      const { sessionKey } = await resolveOpenF1Session(race);
-      const [positions, pits, raceControl, lap1, drivers, lapAt] = await Promise.all([
-        fetchJson(`${OPENF1_BASE}/position?session_key=${sessionKey}`, { ttl: TTL.results, timeout: 30_000 }),
-        fetchJson(`${OPENF1_BASE}/pit?session_key=${sessionKey}`, { ttl: TTL.results }).catch(() => []),
-        fetchJson(`${OPENF1_BASE}/race_control?session_key=${sessionKey}`, { ttl: TTL.results }).catch(() => []),
-        fetchJson(`${OPENF1_BASE}/laps?session_key=${sessionKey}&lap_number=1`, { ttl: TTL.results }).catch(() => []),
-        openF1Drivers(sessionKey),
-        lapAtBuilder(sessionKey),
-      ]);
-      if (!Array.isArray(positions) || !positions.length) throw new Error("no position stream");
-
-      const code = (n) => drivers[n]?.code ?? String(n);
-      const stream = positions
-        .map((p) => ({ t: new Date(p.date).getTime(), n: p.driver_number, pos: p.position }))
-        .sort((a, b) => a.t - b.t);
-
-      const lapStarts = (Array.isArray(lap1) ? lap1 : [])
-        .map((l) => (l.date_start ? new Date(l.date_start).getTime() : null))
-        .filter(Boolean);
-      const raceStart = lapStarts.length ? Math.min(...lapStarts) : stream[0].t;
-
-      const pitTimes = {};
-      (Array.isArray(pits) ? pits : []).forEach((p) => {
-        if (p.date) (pitTimes[p.driver_number] ??= []).push(new Date(p.date).getTime());
-      });
-      const nearPit = (num, t) => (pitTimes[num] ?? []).some((pt) => Math.abs(pt - t) < 35_000);
-
-      const events = [{ t: raceStart, lap: 1, type: "start", label: "Lights out", drivers: [] }];
-
-      /* ---- Overtake detection ---- */
-      const latest = {};
-      const posHolder = {};
-      const lastPair = {};
-      for (const p of stream) {
-        const prev = latest[p.n];
-        if (
-          prev != null &&
-          p.pos === prev - 1 &&               // exactly one place gained = on-track pass
-          p.t > raceStart + 90_000            // skip lap-1 shuffle
-        ) {
-          const displaced = posHolder[p.pos];
-          if (displaced != null && displaced !== p.n && !nearPit(p.n, p.t) && !nearPit(displaced, p.t)) {
-            const key = [p.n, displaced].sort().join("-");
-            if (!lastPair[key] || p.t - lastPair[key] > 45_000) {
-              lastPair[key] = p.t;
-              events.push({
-                t: p.t,
-                lap: lapAt(p.t),
-                type: "overtake",
-                label: `${code(p.n)} passes ${code(displaced)} for P${p.pos}`,
-                drivers: [code(p.n), code(displaced)],
-              });
-            }
-          }
-        }
-        if (prev != null && posHolder[prev] === p.n) delete posHolder[prev];
-        posHolder[p.pos] = p.n;
-        latest[p.n] = p.pos;
-      }
-
-      /* ---- Race control incidents ---- */
-      (Array.isArray(raceControl) ? raceControl : []).forEach((r) => {
-        if (!r.date) return;
-        const t = new Date(r.date).getTime();
-        const msg = (r.message ?? "").toUpperCase();
-        let type = null, label = null;
-        if (r.flag === "RED") { type = "red"; label = "Red flag"; }
-        else if (msg.includes("VIRTUAL SAFETY CAR DEPLOYED")) { type = "vsc"; label = "Virtual Safety Car"; }
-        else if (msg.includes("SAFETY CAR DEPLOYED")) { type = "sc"; label = "Safety Car deployed"; }
-        else if (msg.includes("SAFETY CAR IN THIS LAP") || msg.includes("VIRTUAL SAFETY CAR ENDING")) { type = "sc-end"; label = "Safety Car ending"; }
-        else if (msg.includes("PENALTY")) {
-          type = "penalty";
-          const who = r.driver_number ? code(r.driver_number) : null;
-          label = who ? `Penalty · ${who}` : "Penalty";
-        }
-        if (type) events.push({ t, lap: r.lap_number ?? lapAt(t), type, label, drivers: [] });
-      });
-
-      return events.sort((a, b) => a.t - b.t);
-    },
-    async () => []
-  );
-}
-
-/** Team radio clips: real pit-wall audio (MP3 URLs) with timestamps. */
-export async function getTeamRadio() {
-  return withFallback(
-    "radio",
-    async () => {
-      const race = await jolpicaLatestRaceResults();
-      const { sessionKey } = await resolveOpenF1Session(race);
-      const [rows, drivers, lapAt] = await Promise.all([
-        fetchJson(`${OPENF1_BASE}/team_radio?session_key=${sessionKey}`, { ttl: TTL.results, timeout: 30_000 }),
-        openF1Drivers(sessionKey),
-        lapAtBuilder(sessionKey),
-      ]);
-      if (!Array.isArray(rows) || !rows.length) throw new Error("no team radio");
-      return rows
-        .filter((r) => r.date && r.recording_url)
-        .map((r) => {
-          const t = new Date(r.date).getTime();
-          const id = drivers[r.driver_number] ?? {};
-          return {
-            t,
-            lap: lapAt(t),
-            code: id.code ?? String(r.driver_number),
-            color: id.teamColor ?? "#8B93A7",
-            url: r.recording_url,
-          };
-        })
-        .sort((a, b) => a.t - b.t);
-    },
-    async () => []
-  );
-}
-
 /* ================================================================
- * RADIO & RACE CONTROL (telemetry dashboard)
+ * RACE CONTROL (telemetry dashboard)
  * ----------------------------------------------------------------
- * One chronological message feed merging two OpenF1 sources:
- *   - /team_radio   → pit-wall AUDIO. There is no transcript in the
- *     feed, so these rows carry an MP3 url and no text. Don't invent
- *     message bodies for them.
- *   - /race_control → the only source with real TEXT (flags, safety
- *     car, penalties, track limits).
- * Rows are discriminated by `kind` so the UI can render each honestly.
+ * /race_control notices: flags, safety car, penalties, track limits.
+ * Also the source for the position worm's safety-car bands. Team radio
+ * lives in the replay (getReplayTimeline), where it can play at the
+ * moment it was sent.
  * ================================================================ */
 
 /** Coarse class for colour-coding a race control message. */
@@ -1547,9 +1482,7 @@ function controlCategory(row) {
   return "info";
 }
 
-/* Mock body: race control ONLY. A radio row without a playable clip is
-   dead weight, and fabricating driver quotes would be dishonest — so
-   demo mode shows the message rail with real-shaped control notices. */
+/* Mock body: real-shaped control notices for demo mode. */
 const MOCK_CONTROL = [
   { lap: 1,  offset: 0,        category: "green",   message: "GREEN LIGHT — PIT EXIT OPEN" },
   { lap: 1,  offset: 62_000,   category: "info",    message: "RACE START — TRACK CLEAR" },
@@ -1564,41 +1497,23 @@ const MOCK_CONTROL = [
 ];
 
 /**
- * Merged radio + race control feed, oldest first.
- * Radio rows: { kind:"radio", t, lap, code, name, color, url }
- * Control rows: { kind:"control", t, lap, category, message, code, color }
+ * Race control notices, oldest first.
+ * Rows: { kind:"control", t, lap, category, message, code, color }
  */
-export async function getRadioMessages() {
+export async function getRaceControl() {
   return withFallback(
-    "radio",
+    "control",
     async () => {
       const { sessionKey } = await openF1Context();
-      /* lapAtBuilder rides on the already-cached all-laps fetch, and both
-         endpoints below are the same ones the replay uses — so this adds
-         two requests to the dashboard, not a new data dependency. */
-      const [radioRows, controlRows, drivers, lapAt] = await Promise.all([
-        fetchJson(`${OPENF1_BASE}/team_radio?session_key=${sessionKey}`, { ttl: TTL.results, timeout: 30_000 }).catch(() => []),
+      /* Same race_control request the replay makes; lapAtBuilder rides on
+         the already-cached all-laps fetch. */
+      const [controlRows, drivers, lapAt] = await Promise.all([
         fetchJson(`${OPENF1_BASE}/race_control?session_key=${sessionKey}`, { ttl: TTL.results }).catch(() => []),
         openF1Drivers(sessionKey),
         lapAtBuilder(sessionKey),
       ]);
 
       const messages = [];
-
-      (Array.isArray(radioRows) ? radioRows : []).forEach((r) => {
-        if (!r.date || !r.recording_url) return;
-        const t = new Date(r.date).getTime();
-        const id = drivers[r.driver_number] ?? {};
-        messages.push({
-          kind: "radio",
-          t,
-          lap: lapAt(t),
-          code: id.code ?? String(r.driver_number),
-          name: id.name ?? `#${r.driver_number}`,
-          color: id.teamColor ?? "#8B95A7",
-          url: r.recording_url,
-        });
-      });
 
       (Array.isArray(controlRows) ? controlRows : []).forEach((r) => {
         if (!r.date || !r.message) return;
@@ -1615,10 +1530,9 @@ export async function getRadioMessages() {
         });
       });
 
-      /* Both sources empty means the session genuinely has nothing to show
-         OR both calls failed — either way don't render an empty rail as if
-         it were real. Fall back so the panel is honestly labelled. */
-      if (!messages.length) throw new Error("no radio or race control messages");
+      /* Empty means the session has nothing OR the call failed — either
+         way don't render an empty rail as if it were real. */
+      if (!messages.length) throw new Error("no race control messages");
 
       return messages.sort((a, b) => a.t - b.t);
     },
@@ -1790,4 +1704,28 @@ export async function getSessionTrackTrace(sessionKey) {
     lap: best.lap.lap_number,
     closureError: best.err,
   };
+}
+
+/* ================================================================
+ * POST-RACE INTERVIEWS (FIA press conference transcript)
+ * ----------------------------------------------------------------
+ * Top three only — the FIA publishes no transcript for the rest of the
+ * field. Read through /api/interviews (fia.com has no CORS). Never
+ * falls back to mock: invented quotes attributed to real drivers would
+ * be worse than no quotes.
+ * ================================================================ */
+
+/**
+ * { status: "ok", source, title, date, drivers, sections }
+ * | { status: "not-published" | "unreachable", source }
+ */
+export async function getPostRaceInterviews() {
+  const race = await jolpicaLatestRaceResults();
+  const slug = fiaRaceSlug(race.raceName);
+  const source = fiaTranscriptUrl(race.season, slug);
+  try {
+    return await fetchJson(`/api/interviews?year=${race.season}&race=${slug}`, { ttl: 30 * 60 * 1000, timeout: 20_000 });
+  } catch (err) {
+    return { status: /HTTP 404/.test(err?.message ?? "") ? "not-published" : "unreachable", source };
+  }
 }

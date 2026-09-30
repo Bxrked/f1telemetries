@@ -79,3 +79,28 @@ export const crossfade: Variants = {
 
 /** Standard press feedback for buttons and tappable cards. */
 export const PRESS = { scale: 0.97 };
+
+/**
+ * Headline word rise. Each word sits in an overflow-hidden slot and rises
+ * into it, the way broadcast lower-thirds build — a mask reveal rather than
+ * a fade, so type arrives with weight instead of materialising.
+ */
+export const wordRise: Variants = {
+  hidden: { y: "108%" },
+  show: (i: number = 0) => ({
+    y: "0%",
+    transition: { duration: 0.7, ease: EASE.out, delay: 0.05 + i * 0.07 },
+  }),
+};
+
+/** Accent rule that wipes in from the left once the headline has landed. */
+export const ruleWipe: Variants = {
+  hidden: { scaleX: 0 },
+  show: { scaleX: 1, transition: { duration: 0.6, ease: EASE.out, delay: 0.35 } },
+};
+
+/** Secondary line under a headline: arrives after the words, never with them. */
+export const metaFade: Variants = {
+  hidden: { opacity: 0, y: 6 },
+  show: { opacity: 1, y: 0, transition: { duration: DUR.layout, ease: EASE.out, delay: 0.45 } },
+};

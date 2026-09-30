@@ -7,14 +7,9 @@
 
 export const FEATURES = {
   /**
-   * Race replay ("/live", broadcast mode) — INTENTIONALLY OFF.
-   *
-   * Temporarily shelved, not removed. Every replay component, service
-   * getter and type is still in the repo and still compiles; only the
-   * entry points are gated (nav tab, home card, route, sitemap).
-   *
-   * TO RE-ENABLE: change this to `true`. That is the only edit needed —
-   * /live starts rendering again and its links reappear everywhere.
+   * Race replay ("/live") — the latest race, every lap.
+   * Gates every entry point: nav tab, home card, route and sitemap.
+   * Set to `false` to hide it; /live then redirects to /telemetry.
    */
-  raceReplay: false,
+  raceReplay: true,
 };

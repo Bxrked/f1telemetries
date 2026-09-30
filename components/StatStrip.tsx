@@ -1,85 +1,118 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { Repeat, Ruler, Timer, Thermometer, Sun, CloudRain, Cloud, Wind, Droplets } from "lucide-react";
-import { rowReveal } from "@/lib/motion";
+import { rowReveal, EASE, rowDelay } from "@/lib/motion";
 import { useForceVisible } from "./MotionProvider";
+import CountUp from "./CountUp";
 
-const WEATHER_ICON: Record<string, any> = { Clear: Sun, Cloudy: Cloud, Rain: CloudRain };
+const num = (v: any) => (typeof v === "number" && Number.isFinite(v) ? v : null);
 
-/** Session key metrics rail rendered beside the track map. */
-export default function StatStrip({ session }: { session: any }) {
-  const WeatherIcon = WEATHER_ICON[session.weather.condition] ?? Sun;
+/** Thin instrument gauge under a reading — only for values with a real scale. */
+function Gauge({ pct, i, tone = "bg-carbon-300" }: { pct: number; i: number; tone?: string }) {
   const forceVisible = useForceVisible();
+  return (
+    <span className="mt-1.5 block h-[3px] w-full overflow-hidden bg-carbon-800">
+      <motion.span
+        className={`block h-full origin-left ${tone}`}
+        initial={forceVisible ? false : { scaleX: 0 }}
+        animate={{ scaleX: Math.max(0, Math.min(1, pct)) }}
+        transition={{ duration: 0.8, ease: EASE.out, delay: 0.25 + rowDelay(i) }}
+      />
+    </span>
+  );
+}
 
-  const stats = [
-    { icon: Repeat, label: "Total laps", value: session.totalLaps, unit: "" },
-    { icon: Ruler, label: "Track length", value: session.trackLengthKm ? session.trackLengthKm.toFixed(3) : "—", unit: session.trackLengthKm ? "km" : "" },
+/**
+ * Session key metrics, set as a timing sheet: label left, reading right,
+ * hairline between rows. Rows share the column's height evenly, so the
+ * sheet fills the hero band instead of leaving a void under five cards.
+ *
+ * Readings count up once on arrival — these are headline figures read
+ * one at a time, not a column compared line by line.
+ */
+export default function StatStrip({ session }: { session: any }) {
+  const forceVisible = useForceVisible();
+  const w = session.weather ?? {};
+  const laps = num(session.totalLaps);
+  const km = num(session.trackLengthKm);
+  const distance = laps && km ? laps * km : null;
+
+  const rows: { label: string; value: React.ReactNode; unit?: string; gauge?: { pct: number; tone?: string } }[] = [
+    { label: "Race laps", value: laps != null ? <CountUp value={laps} /> : "—" },
+    { label: "Lap length", value: km != null ? <CountUp value={km} decimals={3} /> : "—", unit: km != null ? "km" : "" },
+    /* Derived, not fetched: laps × length is the race distance. */
+    { label: "Race distance", value: distance != null ? <CountUp value={distance} decimals={1} /> : "—", unit: distance != null ? "km" : "" },
     {
-      icon: Timer,
-      label: "Lap record",
-      value: session.lapRecord.time,
-      unit: "",
-      sub: [session.lapRecord.driver, session.lapRecord.year].filter(Boolean).join(" · "),
+      label: "Track temp",
+      value: num(w.trackTempC) != null ? <CountUp value={w.trackTempC} decimals={Number.isInteger(w.trackTempC) ? 0 : 1} /> : "—",
+      unit: "°C",
+      /* 0–60 °C covers every dry race on the calendar. */
+      gauge: num(w.trackTempC) != null ? { pct: w.trackTempC / 60, tone: "bg-f1red" } : undefined,
     },
-    { icon: Thermometer, label: "Track temp", value: session.weather.trackTempC, unit: "°C" },
     {
-      icon: WeatherIcon,
-      label: "Conditions",
-      value: session.weather.condition,
-      unit: "",
-      sub: `Air ${session.weather.airTempC}°C`,
+      label: "Air temp",
+      value: num(w.airTempC) != null ? <CountUp value={w.airTempC} decimals={Number.isInteger(w.airTempC) ? 0 : 1} /> : "—",
+      unit: "°C",
+    },
+    {
+      label: "Humidity",
+      value: num(w.humidityPct) != null ? <CountUp value={w.humidityPct} /> : "—",
+      unit: "%",
+      gauge: num(w.humidityPct) != null ? { pct: w.humidityPct / 100 } : undefined,
+    },
+    { label: "Wind", value: num(w.windKph) != null ? <CountUp value={w.windKph} /> : "—", unit: "km/h" },
+    {
+      label: "Rain risk",
+      value: num(w.rainProbabilityPct) != null ? <CountUp value={w.rainProbabilityPct} /> : "—",
+      unit: "%",
+      gauge: num(w.rainProbabilityPct) != null ? { pct: w.rainProbabilityPct / 100, tone: "bg-tyre-wet" } : undefined,
     },
   ];
 
   return (
-    <div className="flex h-full flex-col gap-2.5">
-      {stats.map(({ icon: Icon, label, value, unit, sub }, i) => (
-        <motion.div
-          key={label}
-          custom={i}
-          variants={rowReveal}
-          initial={forceVisible ? false : "hidden"}
-          animate="show"
-          className="group relative flex flex-1 items-center gap-3 overflow-hidden rounded-row border border-carbon-700
-            bg-carbon-900/60 px-3.5 py-2.5 transition-colors duration-micro ease-out-expo hover:border-f1red/50"
-        >
-          {/* Left rule picks up the accent on hover — same pit-board language
-              as the Panel notch, at row scale. */}
-          <span className="absolute inset-y-0 left-0 w-[2px] bg-f1red opacity-0 transition-opacity duration-micro group-hover:opacity-100" />
-          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-row bg-carbon-800 text-carbon-300 transition-colors duration-micro group-hover:bg-f1red/15 group-hover:text-f1red-bright">
-            <Icon size={15} strokeWidth={2.2} />
-          </span>
-          <div className="min-w-0">
-            <p className="eyebrow">{label}</p>
-            {/* Values are read, not watched — tabular figures, no animation. */}
-            <p className="timing truncate text-base font-bold leading-tight tabular-nums text-carbon-100">
-              {value}
-              {unit && <span className="ml-1 text-label font-medium text-carbon-400">{unit}</span>}
-            </p>
-            {sub && <p className="truncate text-micro text-carbon-400">{sub}</p>}
-          </div>
-        </motion.div>
-      ))}
-
-      {/* Secondary weather line */}
+    <div className="flex h-full flex-col">
+      {/* Lead reading: the lap record is the one number with a story. */}
       <motion.div
-        custom={stats.length}
+        custom={0}
         variants={rowReveal}
         initial={forceVisible ? false : "hidden"}
         animate="show"
-        className="flex items-center justify-between rounded-row border border-carbon-700 bg-carbon-900/60 px-3.5 py-2 text-data tabular-nums text-carbon-300"
+        className="mb-1 border-b border-carbon-700 pb-3"
       >
-        <span className="flex items-center gap-1.5">
-          <Droplets size={12} className="text-carbon-400" /> {session.weather.humidityPct}%
-        </span>
-        <span className="flex items-center gap-1.5">
-          <Wind size={12} className="text-carbon-400" /> {session.weather.windKph} km/h
-        </span>
-        <span className="flex items-center gap-1.5">
-          <CloudRain size={12} className="text-carbon-400" /> {session.weather.rainProbabilityPct}%
-        </span>
+        <p className="eyebrow">Lap record</p>
+        <p className="timing mt-1 text-3xl font-bold leading-none tracking-tight text-sector-purple">
+          {session.lapRecord?.time ?? "—"}
+        </p>
+        <p className="timing mt-1.5 text-data text-carbon-400">
+          {[session.lapRecord?.driver, session.lapRecord?.year].filter(Boolean).join(" · ") || "No record on file"}
+        </p>
       </motion.div>
+
+      <dl className="flex flex-1 flex-col divide-y divide-carbon-700/60">
+        {rows.map((r, i) => (
+          <motion.div
+            key={r.label}
+            custom={i + 1}
+            variants={rowReveal}
+            initial={forceVisible ? false : "hidden"}
+            animate="show"
+            className="group flex min-h-[40px] flex-1 flex-col justify-center py-1.5"
+          >
+            <div className="flex items-baseline justify-between gap-3">
+              <dt className="eyebrow transition-colors duration-micro group-hover:text-carbon-300">{r.label}</dt>
+              <dd className="timing text-lg font-bold leading-none text-carbon-100">
+                {r.value}
+                {r.unit && <span className="ml-1 text-label font-medium text-carbon-400">{r.unit}</span>}
+              </dd>
+            </div>
+            {r.gauge && <Gauge pct={r.gauge.pct} tone={r.gauge.tone} i={i} />}
+          </motion.div>
+        ))}
+      </dl>
+
+      <p className="timing mt-2 border-t border-carbon-700 pt-2 text-micro uppercase tracking-wider text-carbon-400">
+        Conditions · <span className="text-carbon-100">{w.condition ?? "—"}</span>
+      </p>
     </div>
   );
 }

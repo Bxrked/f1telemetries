@@ -3,9 +3,9 @@ import LiveRacePage from "@/components/LiveRacePage";
 import { FEATURES } from "@/services/features";
 
 export const metadata = {
-  title: "Live Race",
+  title: "Race Replay",
   description:
-    "Broadcast-style animated race map: every car as a labelled dot with live running order, gaps, overtake markers and team radio.",
+    "Replay the latest Grand Prix lap by lap: every car on the circuit, the running order and gaps, safety cars, overtakes and pit stops.",
   alternates: { canonical: "/live" },
 };
 

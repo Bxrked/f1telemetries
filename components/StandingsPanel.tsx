@@ -5,6 +5,7 @@ import { motion } from "framer-motion";
 import { Crown } from "lucide-react";
 import { rowReveal, rowDelay, SPRING, EASE } from "@/lib/motion";
 import { useForceVisible } from "./MotionProvider";
+import CountUp from "./CountUp";
 
 /**
  * Championship standings after the latest round.
@@ -89,7 +90,9 @@ export default function StandingsPanel({ standings }: { standings: any }) {
               </span>
             </div>
             <div className="timing shrink-0 text-right tabular-nums">
-              <p className="text-label font-bold text-carbon-100">{r.points}</p>
+              <p className="text-label font-bold text-carbon-100">
+                <CountUp value={r.points} delay={rowDelay(i)} duration={0.7} />
+              </p>
               <p className="text-micro text-carbon-400">{r.gap === 0 ? "Leader" : `-${r.gap}`}</p>
             </div>
           </motion.li>

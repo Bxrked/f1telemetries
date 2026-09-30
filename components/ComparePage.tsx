@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Swords } from "lucide-react";
+import { motion } from "framer-motion";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer,
 } from "recharts";
@@ -10,6 +10,10 @@ import { formatClock } from "@/services/format";
 import MockDataBanner from "./MockDataBanner";
 import { GRID, TICK, AXIS_LINE, COMPOUND } from "@/lib/chartTheme";
 import TyreStintTimeline from "./TyreStintTimeline";
+import Panel from "./Panel";
+import PageTitle from "./PageTitle";
+import { rowReveal, EASE } from "@/lib/motion";
+import { useForceVisible } from "./MotionProvider";
 
 const A_HEX = "#B44CFF"; // driver A accent (sector purple)
 const B_HEX = "#2EE07C"; // driver B accent (sector green)
@@ -31,14 +35,19 @@ const leftOnTable = (d: any) => {
 };
 
 /**
- * Standard deviation of clean laps — separates a quick-but-erratic driver
- * from a slower metronome, which "best lap" alone cannot.
- *
- * Excludes lap 1 (standing start) and anything more than 7% over the
- * driver's median (pit laps, safety car) — the same threshold the service
- * uses for pace and degradation, so the definition of "clean" stays
- * consistent across the app.
+ * Median of clean laps (same 7%-over-median rule as consistency). Unlike
+ * the average it isn't dragged by the handful of slow laps that survive
+ * the filter, so it's the fairer "typical race lap".
  */
+const medianLap = (d: any) => {
+  const all = (d?.laps ?? []).filter((l: any) => l.n > 1 && l.d > 0).map((l: any) => l.d);
+  if (all.length < 5) return null;
+  const sorted = [...all].sort((x: number, y: number) => x - y);
+  const med = sorted[Math.floor(sorted.length / 2)];
+  const clean = sorted.filter((v: number) => v <= med * 1.07);
+  return clean[Math.floor(clean.length / 2)];
+};
+
 /** Net places made up. Grid 0 (pit-lane start) is already normalised upstream. */
 const placesGained = (d: any) =>
   d?.grid == null || d?.finish == null ? null : d.grid - d.finish;
@@ -236,6 +245,15 @@ function traceRange(a: any[], b: any[]) {
   return { lo: Math.min(...clean), hi: Math.max(...clean) };
 }
 
+/**
+ * Standard deviation of clean laps — separates a quick-but-erratic driver
+ * from a slower metronome, which "best lap" alone cannot.
+ *
+ * Excludes lap 1 (standing start) and anything more than 7% over the
+ * driver's median (pit laps, safety car) — the same threshold the service
+ * uses for pace and degradation, so the definition of "clean" stays
+ * consistent across the app.
+ */
 const consistency = (d: any) => {
   const all = (d?.laps ?? []).filter((l: any) => l.n > 1 && l.d > 0).map((l: any) => l.d);
   if (all.length < 5) return null;
@@ -248,29 +266,70 @@ const consistency = (d: any) => {
   return +Math.sqrt(variance).toFixed(3);
 };
 
-function DriverSelect({ drivers, value, onChange, accent, exclude }: any) {
+function DriverSelect({ drivers, value, onChange, accent, exclude, side }: any) {
   const d = drivers.find((x: any) => x.code === value);
+  const right = side === "b";
   return (
-    <div className="flex-1 rounded-xl border border-carbon-700 bg-carbon-850 p-4" style={{ borderTopColor: accent, borderTopWidth: 3 }}>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="timing w-full rounded-md border border-carbon-700 bg-carbon-950 px-2 py-1.5 text-xs font-bold text-carbon-100"
-        aria-label="Select driver"
-      >
-        {drivers.filter((x: any) => x.code !== exclude).map((x: any) => (
-          <option key={x.code} value={x.code}>{x.code} — {x.name}</option>
-        ))}
-      </select>
-      {d && (
-        <div className="mt-3 flex items-center gap-2">
-          <span className="h-8 w-1 rounded-full" style={{ background: d.teamColor }} />
-          <div>
-            <p className="font-display text-lg font-bold uppercase leading-tight">{d.name}</p>
-            <p className="text-[10px] text-carbon-400">{d.teamName} · P{d.finish} ({d.status})</p>
+    <div
+      className={`group relative flex-1 overflow-hidden rounded-panel border border-carbon-700 bg-carbon-850 shadow-panel
+        transition-colors duration-micro ease-out-expo hover:border-carbon-600`}
+    >
+      {/* Side accent + team livery wash. Keyed on the driver so a new pick
+          sweeps in rather than blinking. */}
+      <span className={`absolute inset-y-0 ${right ? "right-0" : "left-0"} w-[3px]`} style={{ background: accent }} />
+      <motion.span
+        key={d?.code}
+        aria-hidden
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background: `linear-gradient(${right ? "270deg" : "90deg"}, color-mix(in srgb, ${d?.teamColor ?? accent} 16%, transparent), transparent 70%)`,
+        }}
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.5, ease: EASE.out }}
+      />
+      <div className={`relative flex items-end justify-between gap-4 px-5 py-4 ${right ? "flex-row-reverse text-right" : ""}`}>
+        <div className="min-w-0">
+          <p className="eyebrow" style={{ color: accent }}>
+            Driver {right ? "B" : "A"}
+          </p>
+          {/* Big code, rising in on change — the pick is the headline. */}
+          <div className="overflow-hidden pr-[0.12em]">
+            <motion.p
+              key={d?.code}
+              className="font-display text-5xl font-black uppercase italic leading-none tracking-tight text-carbon-100"
+              initial={{ y: "100%" }}
+              animate={{ y: "0%" }}
+              transition={{ duration: 0.5, ease: EASE.out }}
+            >
+              {d?.code ?? "—"}
+            </motion.p>
           </div>
+          {d && (
+            <p className="mt-1.5 truncate text-label text-carbon-300">
+              <span className="font-bold text-carbon-100">{d.name}</span>
+              <span className="text-carbon-500"> · </span>
+              {d.teamName}
+              <span className="text-carbon-500"> · </span>
+              <span className="timing">P{d.finish}</span>
+            </p>
+          )}
         </div>
-      )}
+        <label className="relative shrink-0">
+          <span className="sr-only">Select driver {right ? "B" : "A"}</span>
+          <select
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            className="timing cursor-pointer appearance-none rounded-row border border-carbon-600 bg-carbon-950 py-1.5 pl-2.5 pr-7 text-label font-bold text-carbon-100
+              transition-colors duration-micro hover:border-carbon-400 focus:border-f1red focus:outline-none"
+          >
+            {drivers.filter((x: any) => x.code !== exclude).map((x: any) => (
+              <option key={x.code} value={x.code}>{x.code} — {x.name}</option>
+            ))}
+          </select>
+          <span aria-hidden className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-micro text-carbon-400">▾</span>
+        </label>
+      </div>
     </div>
   );
 }
@@ -279,11 +338,19 @@ function DriverSelect({ drivers, value, onChange, accent, exclude }: any) {
 function StatRow({ label, a, b, fmt, lowerBetter = true }: any) {
   const winner = a == null || b == null ? null : (lowerBetter ? a < b : a > b) ? "a" : a === b ? null : "b";
   const cls = (side: string) =>
-    `timing text-sm font-bold ${winner === side ? (side === "a" ? "text-sector-purple" : "text-sector-green") : "text-carbon-100"}`;
+    `timing text-sm font-bold transition-colors duration-micro ${
+      winner === side ? (side === "a" ? "text-sector-purple" : "text-sector-green") : "text-carbon-100"
+    }`;
   return (
-    <div className="grid grid-cols-3 items-center border-b border-carbon-700/50 py-2 last:border-0">
+    <div className="group relative grid grid-cols-3 items-center border-b border-carbon-700/50 py-2 last:border-0 hover:bg-carbon-800/30">
+      {/* Edge tick on the winning side — readable without parsing colour. */}
+      {winner && (
+        <span
+          className={`absolute inset-y-1.5 w-[2px] ${winner === "a" ? "-left-3 bg-sector-purple" : "-right-3 bg-sector-green"}`}
+        />
+      )}
       <span className={`${cls("a")} text-left`}>{a == null ? "—" : fmt(a)}</span>
-      <span className="eyebrow text-center">{label}</span>
+      <span className="eyebrow text-center transition-colors duration-micro group-hover:text-carbon-300">{label}</span>
       <span className={`${cls("b")} text-right`}>{b == null ? "—" : fmt(b)}</span>
     </div>
   );
@@ -294,6 +361,7 @@ export default function ComparePage() {
   const [feed, setFeed] = useState<any>(null);
   const [codeA, setCodeA] = useState<string | null>(null);
   const [codeB, setCodeB] = useState<string | null>(null);
+  const forceVisible = useForceVisible();
 
   useEffect(() => {
     getDriverComparison().then((d) => {
@@ -343,12 +411,19 @@ export default function ComparePage() {
       /* Full-bleed to match the telemetry board — a 1440px cap left ~250px of
        dead black down each side on a wide monitor. */
     <main className="w-full min-w-0 px-4 py-6 sm:px-6">
-        <div className="h-14 w-1/2 animate-pulse rounded-xl bg-carbon-850" />
-        <div className="mt-4 grid gap-4 sm:grid-cols-2">
-          <div className="h-32 animate-pulse rounded-xl bg-carbon-850" />
-          <div className="h-32 animate-pulse rounded-xl bg-carbon-850" />
+        <div className="skeleton h-24 w-1/2" />
+        <div className="mt-6 grid gap-2 sm:grid-cols-2">
+          <div className="skeleton h-32" />
+          <div className="skeleton h-32" />
         </div>
-        <p className="timing mt-6 text-center text-xs text-carbon-400">Loading comparison data…</p>
+        <div className="mt-2 grid gap-2 xl:grid-cols-2">
+          <div className="skeleton h-80" />
+          <div className="skeleton h-80" />
+        </div>
+        <p className="timing mt-4 flex items-center justify-center gap-2 text-micro uppercase tracking-[0.22em] text-carbon-500">
+          <span className="h-1.5 w-1.5 animate-pulse-dot rounded-full bg-f1red-bright" />
+          Loading lap data
+        </p>
       </main>
     );
   }
@@ -357,19 +432,21 @@ export default function ComparePage() {
     /* Full-bleed to match the telemetry board — a 1440px cap left ~250px of
        dead black down each side on a wide monitor. */
     <main className="w-full min-w-0 px-4 py-6 sm:px-6">
-      <header className="mb-6 border-b border-carbon-700 pb-5">
-        <p className="eyebrow mb-1 flex items-center gap-2">
-          <Swords size={11} className="text-f1red-bright" /> Latest race · driver vs driver
-        </p>
-        <h1 className="font-display text-4xl font-black uppercase italic tracking-tight sm:text-5xl">
-          Head <span className="text-f1red-bright">to</span> Head
-        </h1>
-      </header>
+      <PageTitle
+        eyebrow={
+          <>
+            <span className="inline-block h-1.5 w-1.5 rounded-full bg-f1red-bright" />
+            Latest race · driver vs driver
+          </>
+        }
+        title="Head to Head"
+        tone={(_, i) => (i === 1 ? "text-carbon-400" : "text-carbon-100")}
+      />
 
       <MockDataBanner feed={feed} only={["compare"]} />
 
       {feed?.detail?.compare === "mock" && (
-        <p className="mb-4 rounded-lg border border-sector-yellow/40 bg-sector-yellow/10 px-4 py-2 text-[11px] text-sector-yellow">
+        <p className="mb-4 rounded-panel border border-sector-yellow/40 bg-sector-yellow/[0.06] px-4 py-2 text-data text-sector-yellow">
           <span className="timing font-bold uppercase tracking-wider">Demo data</span> — live
           telemetry for this race couldn&apos;t be loaded, so the drivers and times below are
           built-in sample values, not the race named in the navigation.
@@ -377,14 +454,22 @@ export default function ComparePage() {
       )}
 
       {/* Pickers */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-stretch">
-        <DriverSelect drivers={data.drivers} value={codeA} onChange={setCodeA} accent={A_HEX} exclude={codeB} />
-        <span className="timing self-center font-display text-xl font-black italic text-carbon-400">VS</span>
-        <DriverSelect drivers={data.drivers} value={codeB} onChange={setCodeB} accent={B_HEX} exclude={codeA} />
-      </div>
+      <motion.div
+        className="relative flex flex-col gap-2 sm:flex-row sm:items-stretch"
+        variants={rowReveal}
+        custom={3}
+        initial={forceVisible ? false : "hidden"}
+        animate="show"
+      >
+        <DriverSelect drivers={data.drivers} value={codeA} onChange={setCodeA} accent={A_HEX} exclude={codeB} side="a" />
+        <span className="z-10 grid h-10 w-10 shrink-0 -skew-x-12 place-items-center self-center border border-carbon-600 bg-carbon-950 sm:absolute sm:left-1/2 sm:top-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2">
+          <span className="skew-x-12 font-display text-sm font-black italic text-carbon-300">VS</span>
+        </span>
+        <DriverSelect drivers={data.drivers} value={codeB} onChange={setCodeB} accent={B_HEX} exclude={codeA} side="b" />
+      </motion.div>
 
       {A && B && (
-        <div className="mt-4 grid gap-4 xl:grid-cols-2">
+        <div className="mt-2 grid gap-2 xl:grid-cols-2">
           {/* ── PACE — 9 rows ──────────────────────────────────────────
                 The two panels below are deliberate mirrors: nine rows each,
                 same component, same geometry. Previously one held sixteen
@@ -393,8 +478,8 @@ export default function ComparePage() {
                 symmetric. Split by meaning as well as count: everything
                 about raw speed here, everything about executing the race
                 opposite. */}
-          <section className="flex flex-col rounded-xl border border-carbon-700 bg-carbon-850 px-5 py-3 shadow-panel">
-            <p className="eyebrow mb-1 shrink-0 text-center">Pace</p>
+          <Panel eyebrow="Raw speed" title="Pace" feed={feed?.detail?.compare} fill>
+            <div className="flex h-full flex-col px-3">
             <StatRow label="Finish" a={A.finish} b={B.finish} fmt={(v: number) => `P${v}`} />
             <StatRow label="Grid" a={A.grid} b={B.grid} fmt={(v: number) => `P${v}`} />
             <StatRow label="Best lap" a={A.bestLap} b={B.bestLap} fmt={fmtLap} />
@@ -405,7 +490,7 @@ export default function ComparePage() {
               b={leftOnTable(B)}
               fmt={(v: number) => `+${v.toFixed(3)}s`}
             />
-            <StatRow label="Sector sum Δ" a={theoretical(A)} b={theoretical(B)} fmt={fmtLap} />
+            <StatRow label="Median lap" a={medianLap(A)} b={medianLap(B)} fmt={fmtLap} />
             <StatRow label="Avg pace" a={A.avgPace} b={B.avgPace} fmt={fmtLap} />
             <StatRow label="Vmax" a={A.vmax} b={B.vmax} fmt={(v: number) => `${v} km/h`} lowerBetter={false} />
             <StatRow
@@ -442,12 +527,12 @@ export default function ComparePage() {
                 );
               })}
             </div>
-          </section>
+            </div>
+          </Panel>
 
-          {/* Best sectors: facing bars */}
           {/* ── RACE EXECUTION — 9 rows, mirroring Pace ───────────────── */}
-          <section className="flex flex-col rounded-xl border border-carbon-700 bg-carbon-850 px-5 py-3 shadow-panel">
-            <p className="eyebrow mb-1 shrink-0 text-center">Race execution</p>
+          <Panel eyebrow="Strategy & racecraft" title="Race Execution" feed={feed?.detail?.compare} fill>
+            <div className="flex h-full flex-col px-3">
             <StatRow label="Pit stops" a={A.pits.length} b={B.pits.length} fmt={(v: number) => `${v}`} />
             <StatRow
               label="Pit lane total"
@@ -519,12 +604,12 @@ export default function ComparePage() {
                 <StintChips driver={B} align="start" />
               </div>
             </div>
-          </section>
+            </div>
+          </Panel>
 
           {/* Lap traces — full width, since they're a visual and belong with
               the other full-width charts rather than inside a stats column. */}
-          <section className="rounded-xl border border-carbon-700 bg-carbon-850 p-5 shadow-panel xl:col-span-2">
-            <p className="eyebrow mb-2">Lap-time trace · shared scale · mirrored · outward = slower</p>
+          <Panel eyebrow="Shared scale · mirrored · outward = slower" title="Lap-Time Trace" feed={feed?.detail?.compare} className="xl:col-span-2">
             {(() => {
               const { lo, hi } = traceRange(A.laps, B.laps);
               return (
@@ -539,13 +624,15 @@ export default function ComparePage() {
               <span>L1</span>
               <span>L{data.totalLaps}</span>
             </div>
-          </section>
+          </Panel>
 
           {/* Cumulative gap */}
-          <section className="rounded-xl border border-carbon-700 bg-carbon-850 p-5 shadow-panel xl:col-span-2">
-            <p className="eyebrow mb-1">
-              Cumulative gap · above zero = <span style={{ color: A_HEX }}>{A.code}</span> ahead
-            </p>
+          <Panel
+            eyebrow={`Above zero = ${A.code} ahead`}
+            title="Cumulative Gap"
+            feed={feed?.detail?.compare}
+            className="xl:col-span-2"
+          >
             <div className="h-56">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={gapSeries} margin={{ top: 6, right: 10, left: -18, bottom: 0 }}>
@@ -556,7 +643,7 @@ export default function ComparePage() {
                   <Tooltip
                     content={({ active, payload, label }: any) =>
                       active && payload?.length ? (
-                        <div className="rounded-lg border border-carbon-600 bg-carbon-900/95 px-3 py-2 shadow-panel">
+                        <div className="rounded-row border border-carbon-600 bg-carbon-950/95 px-3 py-2 shadow-panel backdrop-blur-sm">
                           <p className="eyebrow mb-0.5">Lap {label}</p>
                           <p className="timing text-xs font-bold" style={{ color: payload[0].value >= 0 ? A_HEX : B_HEX }}>
                             {payload[0].value >= 0 ? A.code : B.code} ahead by {Math.abs(payload[0].value).toFixed(2)}s
@@ -565,16 +652,29 @@ export default function ComparePage() {
                       ) : null
                     }
                   />
-                  <Line type="monotone" dataKey="gap" stroke={A_HEX} strokeWidth={2} dot={false} isAnimationActive={false} />
+                  <Line
+                    type="monotone"
+                    dataKey="gap"
+                    stroke={A_HEX}
+                    strokeWidth={2}
+                    dot={false}
+                    activeDot={{ r: 3.5, strokeWidth: 0 }}
+                    /* Redraws on every pick, left to right: the gap story
+                       replays for each new pairing. */
+                    key={`${A.code}-${B.code}`}
+                    isAnimationActive={!forceVisible}
+                    animationDuration={1100}
+                    animationEasing="ease-out"
+                  />
                 </LineChart>
               </ResponsiveContainer>
             </div>
-          </section>
+          </Panel>
 
           {/* Lap duel */}
           {duel.length > 0 && (
-            <section className="flex flex-col rounded-xl border border-carbon-700 bg-carbon-850 p-5 shadow-panel">
-              <p className="eyebrow mb-2 shrink-0">Lap duel · 18 sampled racing laps</p>
+            <Panel eyebrow="18 sampled racing laps" title="Lap Duel" feed={feed?.detail?.compare} fill>
+              <div className="flex h-full flex-col">
               <div className="flex shrink-0 gap-[3px]">
                 {duel.map((s: any, i: number) => (
                   <span
@@ -598,12 +698,12 @@ export default function ComparePage() {
                 <p className="eyebrow mb-2 shrink-0">Per-lap delta · every lap · above line = {A.code} quicker</p>
                 <LapDelta a={A} b={B} aHex={A_HEX} bHex={B_HEX} />
               </div>
-            </section>
+              </div>
+            </Panel>
           )}
 
           {/* Strategy + pit stops */}
-          <section className="rounded-xl border border-carbon-700 bg-carbon-850 p-5 shadow-panel">
-            <p className="eyebrow mb-3">Tyre strategy & pit stops</p>
+          <Panel eyebrow="Tyres & stops" title="Strategy" feed={feed?.detail?.compare}>
             <TyreStintTimeline
               stints={[{ code: A.code, stints: A.stints }, { code: B.code, stints: B.stints }]}
               totalLaps={data.totalLaps}
@@ -611,22 +711,22 @@ export default function ComparePage() {
             <div className="mt-3 grid grid-cols-2 gap-4">
               {[A, B].map((d: any, i) => (
                 <div key={d.code}>
-                  <p className="timing mb-1 text-[10px] font-bold" style={{ color: i === 0 ? A_HEX : B_HEX }}>
+                  <p className="timing mb-1 text-micro font-bold" style={{ color: i === 0 ? A_HEX : B_HEX }}>
                     {d.code} stops
                   </p>
                   {d.pits.length ? (
-                    <ul className="timing space-y-0.5 text-[11px] text-carbon-300">
+                    <ul className="timing space-y-0.5 text-data text-carbon-300">
                       {d.pits.map((p: any, j: number) => (
                         <li key={j}>L{p.lap} · {p.laneTime.toFixed(1)}s lane</li>
                       ))}
                     </ul>
                   ) : (
-                    <p className="text-[11px] text-carbon-400">No stops recorded</p>
+                    <p className="text-data text-carbon-400">No stops recorded</p>
                   )}
                 </div>
               ))}
             </div>
-          </section>
+          </Panel>
         </div>
       )}
     </main>
