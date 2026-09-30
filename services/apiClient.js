@@ -103,6 +103,28 @@ function lsGet(url) {
   }
 }
 
+/* Expired entries are otherwise only removed when the same URL is read
+   again — and every race brings new URLs, so old ones pile up until the
+   quota is full and caching silently stops. Sweep once per page load. */
+function lsPrune() {
+  try {
+    if (typeof window === "undefined") return;
+    const now = Date.now();
+    for (const key of Object.keys(window.localStorage)) {
+      if (!key.startsWith(LS_PREFIX)) continue;
+      try {
+        const entry = JSON.parse(window.localStorage.getItem(key) ?? "null");
+        if (!entry || !(entry.expires > now)) window.localStorage.removeItem(key);
+      } catch {
+        window.localStorage.removeItem(key); // unreadable → useless
+      }
+    }
+  } catch {
+    /* storage unavailable (private mode) — nothing to prune */
+  }
+}
+lsPrune();
+
 function lsSet(url, expires, data) {
   try {
     if (typeof window === "undefined") return;

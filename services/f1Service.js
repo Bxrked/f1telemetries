@@ -1388,8 +1388,19 @@ export async function getReplayTimeline() {
 
       /* Team radio: pit-wall AUDIO. OpenF1 ships no transcript, so a clip
          is a sound to play, never a quote — don't invent text for it. */
+      /* Clips are played straight from their URL, so only accept the one
+         host OpenF1 serves them from, over HTTPS — a bad or hijacked row
+         can't make the page load audio from anywhere else. */
+      const isClipUrl = (u) => {
+        try {
+          const url = new URL(u);
+          return url.protocol === "https:" && url.hostname === "livetiming.formula1.com";
+        } catch {
+          return false;
+        }
+      };
       const radio = (Array.isArray(radioRows) ? radioRows : [])
-        .filter((r) => r.date && r.recording_url)
+        .filter((r) => r.date && isClipUrl(r.recording_url))
         .map((r) => ({ t: Date.parse(r.date), num: r.driver_number, url: r.recording_url }))
         .sort((a, b) => a.t - b.t);
       radio.forEach((r) => {

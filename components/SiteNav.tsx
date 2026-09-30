@@ -40,13 +40,13 @@ export default function SiteNav() {
       <div className="mx-auto flex max-w-7xl items-center gap-1.5 px-4 py-3.5 sm:px-6 2xl:max-w-[1440px]">
         <Link href="/" className="group mr-4 flex shrink-0 items-center gap-2.5" aria-label="F1 Telemetries — home">
           {/* The mark carries "F1"; the wordmark beside it completes the name.
-              Plain <img>: a 33 KB static PNG gains nothing from next/image. */}
+              Plain <img>: a 7 KB static PNG (2.5x its display size) gains nothing from next/image. */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src="/f1-logo.png"
             alt=""
-            width={812}
-            height={206}
+            width={252}
+            height={64}
             className="h-5 w-auto transition-transform duration-micro ease-out-expo group-hover:-translate-y-px sm:h-6"
           />
           <span className="hidden font-display text-base font-bold uppercase tracking-wider text-carbon-100 md:block">

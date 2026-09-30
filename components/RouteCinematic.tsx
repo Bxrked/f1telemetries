@@ -20,7 +20,7 @@ import { EASE } from "@/lib/motion";
 
 /**
  * Anchors as percentages of the hero box, targeting bodywork in the
- * RESTING side-profile photograph (public/2nd.webp). The car in that
+ * RESTING side-profile frame of the hero (originally a still photo). The car in that
  * frame faces right: rear wing far left, nose and front wing right.
  *
  * Percentages resolve against the element carrying transformOrigin, NOT
