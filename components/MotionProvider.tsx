@@ -15,10 +15,20 @@ import { MotionConfig } from "framer-motion";
  */
 const ForceVisibleCtx = createContext(false);
 
+/* Set once the app has mounted in this document. Lets a component tell
+   "rendered during the page's first load" from "rendered after in-app
+   navigation" — the homepage intro only belongs to the former. */
+let appMounted = false;
+export const isAppMounted = () => appMounted;
+
 export const useForceVisible = () => useContext(ForceVisibleCtx);
 
 export default function MotionProvider({ children }: { children: ReactNode }) {
   const [force, setForce] = useState(false);
+
+  useEffect(() => {
+    appMounted = true;
+  }, []);
 
   useEffect(() => {
     /* A document that isn't visible never composites: rAF stops ticking

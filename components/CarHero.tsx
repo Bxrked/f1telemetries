@@ -28,7 +28,7 @@ const VIDEO_SRC = process.env.NEXT_PUBLIC_CAR_VIDEO_URL || "/car-reveal.mp4";
  *    a still hero rather than replaying forever in the corner of the eye.
  *  - Reduced motion: jumps straight to the final frame, no movement.
  */
-export default function CarHero({ className = "" }: { className?: string }) {
+export default function CarHero({ className = "", hold = false }: { className?: string; hold?: boolean }) {
   const reduced = useReducedMotion();
   const ref = useRef<HTMLVideoElement>(null);
   /* A missing clip must degrade to a designed backdrop, not a black void
@@ -50,10 +50,18 @@ export default function CarHero({ className = "" }: { className?: string }) {
       return;
     }
 
+    /* While the homepage intro is deciding / running, it owns playback:
+       it restarts the clip from frame 0 the moment its window opens. */
+    if (hold) {
+      v.pause();
+      return;
+    }
+
     /* Autoplay can still be refused (power saving, strict settings). The
-       poster frame stays up in that case rather than a blank box. */
-    v.play().catch(() => {});
-  }, [reduced]);
+       poster frame stays up in that case rather than a blank box. Never
+       restart a clip that already finished — it holds its last frame. */
+    if (!v.ended) v.play().catch(() => {});
+  }, [reduced, hold]);
 
   /* Fallback: a lit carbon backdrop rather than nothing. Keeps the page
      looking deliberate on any clone or deploy without the media. */
@@ -79,7 +87,8 @@ export default function CarHero({ className = "" }: { className?: string }) {
       src={VIDEO_SRC}
       muted
       playsInline
-      autoPlay={!reduced}
+      autoPlay={!reduced && !hold}
+      data-hero
       preload="auto"
       onError={() => setFailed(true)}
       aria-label="Formula 1 car reveal"

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import { BarChart3, Radio, Swords, Trophy, ArrowRight } from "lucide-react";
@@ -8,6 +8,7 @@ import { getSeasonSchedule } from "@/services/f1Service";
 import { FEATURES } from "@/services/features";
 import { DUR, EASE, SPRING, PRESS, rowDelay } from "@/lib/motion";
 import CarHero from "./CarHero";
+import HomeIntro from "./HomeIntro";
 import RollingDigits from "./RollingDigits";
 import { useCountdown, formatCountdown } from "@/lib/useCountdown";
 import { useCinematic, ZOOM_OUT_KEY } from "./RouteCinematic";
@@ -54,6 +55,11 @@ export default function HomeLanding() {
   /* Set when we arrived from a section — the camera pulls back out of the
      same bodywork we dived into. */
   const [zoomOutFrom, setZoomOutFrom] = useState<string | null>(null);
+  /* The intro (first landing only) owns the hero until it's done; the
+     section cards wait for it too, so they arrive after the fly-through
+     rather than already sitting there when the window opens. */
+  const [introDone, setIntroDone] = useState(false);
+  const onIntroDone = useCallback(() => setIntroDone(true), []);
 
   useEffect(() => {
     try {
@@ -97,7 +103,7 @@ export default function HomeLanding() {
               : { duration: 0.6, ease: EASE.out }
         }
       >
-        <CarHero />
+        <CarHero hold={!introDone} />
       </motion.div>
 
       {/* Bottom scrim — keeps the options legible at moments where the
@@ -112,7 +118,7 @@ export default function HomeLanding() {
       >
         <div className="mx-auto grid w-full max-w-4xl gap-3 sm:grid-cols-2">
           {VISIBLE_SECTIONS.map(({ href, icon: Icon, title, desc, part }, i) => (
-            <motion.div key={href} custom={i} variants={enter} initial="hidden" animate="show">
+            <motion.div key={href} custom={i} variants={enter} initial="hidden" animate={introDone ? "show" : "hidden"}>
               <motion.div whileHover={{ y: -3 }} whileTap={PRESS} transition={SPRING.press}>
                 <Link
                   href={href}
@@ -175,6 +181,7 @@ export default function HomeLanding() {
           )}
         </div>
       </motion.div>
+      <HomeIntro onDone={onIntroDone} />
     </main>
   );
 }

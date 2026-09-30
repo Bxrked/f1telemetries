@@ -84,6 +84,15 @@ Two hard-won constraints, both documented at length in the source:
 - **Post-race interviews** come from the FIA's press conference transcript (top three only — nothing exists for the rest of the field). `app/api/interviews/route.ts` fetches it server-side (fia.com has no CORS), with `year`/`race` validated so it can only ever request the FIA transcript URL pattern, cached 30 min. `services/fiaTranscript.js` parses line by line because pages differ (one `<p>` per line vs one `<p>` with `<br>`s); it returns null rather than guess. fia.com answers unknown URLs with its news index (200), so "not published" = no transcript found, not a 404. Never mock quotes. Run `node diag-interviews.mjs [year slug]` if the tab ever shows "not published" for an old race.
 - **Motion is curved on purpose.** The reference line is a centripetal Catmull-Rom loop resampled at ~2 m, and distance-over-time is monotone-cubic, so heading and speed are continuous; GPS mode interpolates with the same spline. Straight segments between ~4 Hz GPS samples made cars snap direction (up to 27°/frame) and lurch in speed (up to 69%/frame) at 1×; the curves bring that to 7° and 25%. The replay draws its track from this same smoothed line — don't switch it back to `outline.sectors`, or cars sit off the drawn track in corners. Frame rate was never the problem: 60 fps with no frame over 20 ms, measured in headless Chrome.
 
+### Homepage intro (`components/HomeIntro.tsx`)
+
+The F1 mark is a hole in a black layer; the real hero video shows through it, reframed so the car sits inside the letterforms, then the hole scales ~70x around a point in the "1" (fly-through) while the footage eases back to normal framing. One rAF clock writes SVG attributes directly.
+
+- **Plays only when the home page is the landing page**, once per tab session. The overlay renders only during the document's first hydration (`isAppMounted()` from MotionProvider is false), so in-app navigation to `/` never shows it. The play/skip decision is made **once per page load** (`decideOnce`) — deciding in an effect broke under React's dev double-invoke (the first run marked the visit seen, the second skipped).
+- Skips: reduced motion, background tab, any click/key/scroll/touch, 7 s failsafe. Waits ≤1.5 s for the video to be playable (it's also the hero loader).
+- `CAR` in HomeIntro is where the car sits in frame 0 of `car-reveal.mp4` — **re-measure it if the hero video changes**. While framing, the video element is sized to the whole picture: `object-fit: cover` crops to the element box and a transform scales the cropped box, which cut the car off on portrait phones.
+- The mark is a vector (`lib/f1Mark.ts`, traced from the logo art, 97.8 % pixel overlap); the nav uses the same shape via `F1Mark`.
+
 ### Progressive loading
 
 `TelemetryDashboard` fires all ~12 feeds independently and paints each panel as its data lands, rather than awaiting the slowest. Cheap Jolpica feeds are launched first for perceived speed. Panels render `PanelLoading` until their key is populated.
