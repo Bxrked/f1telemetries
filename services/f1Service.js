@@ -691,7 +691,7 @@ async function fetchLapSamples(sessionKey, lap, ttl) {
   if (!Array.isArray(raw) || raw.length < 50) return null;
   const samples = raw
     .filter((p) => p.x != null && p.y != null && !(p.x === 0 && p.y === 0))
-    .map((p) => ({ t: new Date(p.date).getTime(), x: p.x, y: p.y }))
+    .map((p) => ({ t: new Date(p.date).getTime(), x: p.x, y: p.y, z: p.z ?? 0 }))
     .sort((a, b) => a.t - b.t);
   return samples.length >= 50 ? { samples, lap, t0 } : null;
 }

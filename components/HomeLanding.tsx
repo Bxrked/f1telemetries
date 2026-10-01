@@ -11,7 +11,7 @@ import CarHero from "./CarHero";
 import HomeIntro from "./HomeIntro";
 import RollingDigits from "./RollingDigits";
 import { useCountdown, formatCountdown } from "@/lib/useCountdown";
-import { useCinematic, ZOOM_OUT_KEY } from "./RouteCinematic";
+import { useCinematic } from "./RouteCinematic";
 
 const SECTIONS = [
   {
@@ -50,36 +50,18 @@ const enter = {
 };
 
 export default function HomeLanding() {
-  const { play, zoom } = useCinematic();
+  const { play } = useCinematic();
   const [schedule, setSchedule] = useState<any>(null);
-  /* Set when we arrived from a section — the camera pulls back out of the
-     same bodywork we dived into. */
-  const [zoomOutFrom, setZoomOutFrom] = useState<string | null>(null);
-  /* The intro (first landing only) owns the hero until it's done; the
+  /* The intro (every visit to home) owns the hero until it's done; the
      section cards wait for it too, so they arrive after the fly-through
      rather than already sitting there when the window opens. */
   const [introDone, setIntroDone] = useState(false);
   const onIntroDone = useCallback(() => setIntroDone(true), []);
 
   useEffect(() => {
-    try {
-      const from = sessionStorage.getItem(ZOOM_OUT_KEY);
-      if (from) {
-        setZoomOutFrom(from);
-        sessionStorage.removeItem(ZOOM_OUT_KEY);
-      }
-    } catch {
-      /* private mode — the hero simply appears */
-    }
-  }, []);
-
-  useEffect(() => {
     getSeasonSchedule().then(setSchedule).catch(() => {});
   }, []);
   const left = useCountdown(schedule?.nextRace?.date);
-
-  const chrome = { opacity: zoom ? 0 : 1 };
-  const chromeT = { duration: zoom ? 0.35 : 0.5, ease: zoom ? EASE.in : EASE.out };
 
   return (
     /* flex-1 + min-h-0: fills whatever the sticky nav leaves, at any
@@ -88,34 +70,17 @@ export default function HomeLanding() {
     <main className="relative min-h-0 w-full flex-1 overflow-hidden">
       {/* ── Fullscreen reveal. `fixed inset-0` so the footage covers the
              entire viewport including behind the translucent nav, rather
-             than stopping at the nav's lower edge. The dive and pull-out
-             ride on this wrapper; the camera move is in the footage. ─── */}
-      <motion.div
-        className="fixed inset-0 z-0"
-        style={{ transformOrigin: zoom?.origin ?? zoomOutFrom ?? "50% 50%" }}
-        initial={zoomOutFrom ? { scale: 6, opacity: 0 } : { opacity: 0 }}
-        animate={zoom ? { scale: 6, opacity: 0 } : { scale: 1, opacity: 1 }}
-        transition={
-          zoom
-            ? { duration: 1.1, ease: EASE.in }
-            : zoomOutFrom
-              ? { duration: 1.0, ease: EASE.out }
-              : { duration: 0.6, ease: EASE.out }
-        }
-      >
+             than stopping at the nav's lower edge. ─── */}
+      <div className="fixed inset-0 z-0">
         <CarHero hold={!introDone} />
-      </motion.div>
+      </div>
 
       {/* Bottom scrim — keeps the options legible at moments where the
           footage isn't black behind them. */}
       <div className="pointer-events-none fixed inset-x-0 bottom-0 z-0 h-[38%] bg-gradient-to-t from-black via-black/85 to-transparent" />
 
       {/* ── Options, in the black band at the bottom ───────────────── */}
-      <motion.div
-        className="fixed inset-x-0 bottom-0 z-10 px-4 pb-5 sm:px-6 sm:pb-7"
-        animate={chrome}
-        transition={chromeT}
-      >
+      <div className="fixed inset-x-0 bottom-0 z-10 px-4 pb-5 sm:px-6 sm:pb-7">
         <div className="mx-auto grid w-full max-w-4xl gap-3 sm:grid-cols-2">
           {VISIBLE_SECTIONS.map(({ href, icon: Icon, title, desc, part }, i) => (
             <motion.div key={href} custom={i} variants={enter} initial="hidden" animate={introDone ? "show" : "hidden"}>
@@ -180,7 +145,7 @@ export default function HomeLanding() {
             </span>
           )}
         </div>
-      </motion.div>
+      </div>
       <HomeIntro onDone={onIntroDone} />
     </main>
   );

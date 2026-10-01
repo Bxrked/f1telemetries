@@ -123,6 +123,14 @@ export function buildReference(samples, lap) {
      back to sample 0). */
   const N = n * SUBDIV;
   const x = new Float64Array(N + 1), y = new Float64Array(N + 1), d = new Float64Array(N + 1);
+  /* Elevation (3D view) along the same dense path. GPS height has the odd
+     glitch sample, so median-filter it (window 5) before interpolating. */
+  const zr = pts.map((p) => p.z ?? 0);
+  const zs = zr.map((_, i) => {
+    const w = [-2, -1, 0, 1, 2].map((o) => zr[((i + o) % n + n) % n]).sort((a, b) => a - b);
+    return w[2];
+  });
+  const z = new Float64Array(N + 1);
   const at = (i) => pts[((i % n) + n) % n];
   const sampleDist = new Float64Array(n + 1); // arc distance at each sample
   let acc = 0;
@@ -134,11 +142,12 @@ export function buildReference(samples, lap) {
       const [px, py] = catmullRom(p0.x, p0.y, p1.x, p1.y, p2.x, p2.y, p3.x, p3.y, k / SUBDIV);
       if (j) acc += Math.hypot(px - x[j - 1], py - y[j - 1]);
       x[j] = px; y[j] = py; d[j] = acc;
+      z[j] = zs[i] + (zs[(i + 1) % n] - zs[i]) * (k / SUBDIV);
     }
   }
   /* Close the loop back onto the first point. */
   acc += Math.hypot(x[0] - x[N - 1], y[0] - y[N - 1]);
-  x[N] = x[0]; y[N] = y[0]; d[N] = acc;
+  x[N] = x[0]; y[N] = y[0]; d[N] = acc; z[N] = z[0];
   const total = acc;
   sampleDist[n] = total;
 
@@ -149,7 +158,7 @@ export function buildReference(samples, lap) {
   tk[n] = tk[0] + lapMs;
   const mk = monotoneSlopes(tk, sampleDist);
 
-  const ref = { x, y, d, n: N + 1, tk, dk: sampleDist, mk, total, lapMs, line: 0, sectorBounds: [0, lapMs] };
+  const ref = { x, y, z, d, n: N + 1, tk, dk: sampleDist, mk, total, lapMs, line: 0, sectorBounds: [0, lapMs] };
   /* The timing line: where the reference car was at the lap's start. */
   ref.line = rawDistAt(ref, 0) % total;
 
@@ -182,6 +191,16 @@ export function pointAtDist(ref, dist) {
   const i = Math.max(0, Math.min(n - 2, floorIndex(d, r)));
   const f = (r - d[i]) / (d[i + 1] - d[i] || 1);
   return [lerp(x[i], x[i + 1], f), lerp(y[i], y[i + 1], f)];
+}
+
+/** World [x, y, z] at a lap distance. */
+export function pointAtDist3(ref, dist) {
+  const { x, y, z, d, n, total } = ref;
+  let r = (dist + ref.line) % total;
+  if (r < 0) r += total;
+  const i = Math.max(0, Math.min(n - 2, floorIndex(d, r)));
+  const f = (r - d[i]) / (d[i + 1] - d[i] || 1);
+  return [lerp(x[i], x[i + 1], f), lerp(y[i], y[i + 1], f), lerp(z[i], z[i + 1], f)];
 }
 
 /* ================================================================

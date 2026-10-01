@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import { AnimatePresence, motion } from "framer-motion";
 import { Play, Pause, SkipBack, SkipForward, ChevronsLeft, ChevronsRight, Volume2, VolumeX, Square } from "lucide-react";
 import { getReplayTimeline, getReplayGpsWindow, getTrackOutline, getPostRaceInterviews } from "@/services/f1Service";
@@ -13,6 +14,17 @@ import TimingTower from "./replay/TimingTower";
 import EventFeed from "./replay/EventFeed";
 import Interviews from "./replay/Interviews";
 import { useTeamRadio, RadioClip } from "./replay/useTeamRadio";
+
+/* three.js (~600 kB) only downloads for people who switch to 3D. */
+const Replay3D = dynamic(() => import("./replay/Replay3D"), {
+  ssr: false,
+  loading: () => (
+    <div className="absolute inset-0 grid place-items-center">
+      <p className="timing text-micro uppercase tracking-[0.22em] text-carbon-500">Building 3D circuit…</p>
+    </div>
+  ),
+});
+const VIEW_KEY = "f1replay:view";
 
 const SPEEDS = [1, 2, 5, 10, 30, 60];
 /* Real GPS is streamed at these speeds and below. Above, a lap plays in
@@ -52,6 +64,28 @@ export default function RaceReplay() {
   const clockRef = useRef<ReplayClock>({ t: 0, speed: 10, playing: false });
   const [ui, setUi] = useState({ t: 0, speed: 10, playing: false });
   const [focus, setFocus] = useState<number | null>(null);
+  /* 2D map or 3D circuit — remembered per browser, a convenience only. */
+  const [view, setView] = useState<"2d" | "3d">("2d");
+  const [no3d, setNo3d] = useState(false);
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(VIEW_KEY) === "3d") setView("3d");
+    } catch {
+      /* storage blocked — 2D it is */
+    }
+  }, []);
+  const chooseView = useCallback((v: "2d" | "3d") => {
+    setView(v);
+    try {
+      localStorage.setItem(VIEW_KEY, v);
+    } catch {
+      /* fine */
+    }
+  }, []);
+  const on3dUnsupported = useCallback(() => {
+    setNo3d(true);
+    setView("2d");
+  }, []);
   const [lowerThird, setLowerThird] = useState<any>(null);
   const [panel, setPanel] = useState<"feed" | "interviews">("feed");
   const [interviews, setInterviews] = useState<any>(null);
@@ -334,8 +368,19 @@ export default function RaceReplay() {
 
         {/* Map */}
         <section className="relative order-1 flex min-h-0 flex-col overflow-hidden rounded-panel border border-carbon-700 bg-carbon-900 shadow-panel lg:order-2">
-          <div className="relative min-h-[360px] flex-1 px-2 pb-2 pt-12 sm:min-h-[480px]">
-            <ReplayCanvas data={data} outline={outline} clockRef={clockRef} gps={gpsRef} focus={focus} speakingRef={radio.speakingRef} />
+          <div className={`relative min-h-[360px] flex-1 sm:min-h-[480px] ${view === "2d" ? "px-2 pb-2 pt-12" : ""}`}>
+            {view === "3d" ? (
+              <Replay3D
+                data={data}
+                clockRef={clockRef}
+                focus={focus}
+                onFocus={setFocus}
+                speakingRef={radio.speakingRef}
+                onUnsupported={on3dUnsupported}
+              />
+            ) : (
+              <ReplayCanvas data={data} outline={outline} clockRef={clockRef} gps={gpsRef} focus={focus} speakingRef={radio.speakingRef} />
+            )}
 
             {/* Lap counter */}
             <div className="pointer-events-none absolute left-4 top-3">
@@ -347,8 +392,27 @@ export default function RaceReplay() {
               <p className="timing mt-1 text-micro text-carbon-400">T+{clock(ui.t - tl.raceStart)}</p>
             </div>
 
-            {/* Source chip — honest about what's drawn right now */}
+            {/* View toggle, then the source chip — honest about what's drawn
+                right now (2D only: the 3D view always places by timing). */}
             <div className="pointer-events-none absolute right-4 top-3 flex flex-col items-end gap-1">
+              {!no3d && (
+                <div className="pointer-events-auto flex rounded-row border border-carbon-600 bg-carbon-950/85 p-0.5" role="group" aria-label="Map view">
+                  {(["2d", "3d"] as const).map((v) => (
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() => chooseView(v)}
+                      aria-pressed={view === v}
+                      className={`timing relative z-10 px-2.5 py-0.5 text-micro font-bold uppercase tracking-wider transition-colors duration-micro
+                        ${view === v ? "text-white" : "text-carbon-400 hover:text-carbon-100"}`}
+                    >
+                      {view === v && <motion.span layoutId="replay-view" className="absolute inset-0 -z-10 rounded-[3px] bg-f1red" transition={SPRING.panel} />}
+                      {v}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {view === "2d" && (
               <span
                 className={`timing flex items-center gap-1.5 rounded-row border px-2 py-0.5 text-micro font-bold uppercase tracking-wider transition-colors duration-layout
                   ${gpsLive ? "border-sector-green/50 text-sector-green" : "border-carbon-600 text-carbon-400"}`}
@@ -361,6 +425,7 @@ export default function RaceReplay() {
                 <span className={`h-1.5 w-1.5 rounded-full ${gpsLive ? "animate-pulse-dot bg-sector-green" : "bg-carbon-500"}`} />
                 {gpsLive ? "GPS" : "Timing"}
               </span>
+              )}
               {focus != null && (
                 <button
                   type="button"

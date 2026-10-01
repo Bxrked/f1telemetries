@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { F1_MARK } from "@/lib/f1Mark";
-import { isAppMounted } from "./MotionProvider";
+import { transitionBusy } from "./RouteCinematic";
 
 /**
  * Homepage intro — the F1 mark as a window onto the hero footage.
@@ -16,17 +16,16 @@ import { isAppMounted } from "./MotionProvider";
  *              the "1" until the black layer is gone, while the footage
  *              swings into its three-quarter view.
  *
- * When it plays: only when the home page is the page someone LANDS on,
- * once per tab session. Never after in-app navigation (the overlay only
- * renders during the document's first hydration — see isAppMounted), never
- * on a reload in the same tab, never with reduced motion, never in a
- * background tab. Any click, key, scroll or touch skips it.
+ * When it plays: every time the home page is shown — landing on it, a
+ * reload, or navigating back to it in the app. Never with reduced motion,
+ * never in a background tab. Any click, key, scroll or touch skips it.
  *
  * It doubles as the hero loader: the wipe waits until the video can play
  * (at most MAX_VIDEO_WAIT), so the footage is ready when the window opens.
+ * Arriving through a page transition, it also waits until the ribbons have
+ * left the screen (transitionBusy) — their tails reveal its black layer.
  */
 
-const SEEN_KEY = "f1intro:seen";
 const T = { wipeStart: 300, wipeEnd: 1100, wordStart: 1050, wordEnd: 1450, flyStart: 1700, flyEnd: 2600 };
 const MAX_VIDEO_WAIT = 1500;
 const FAILSAFE_MS = 7000;
@@ -49,36 +48,17 @@ const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
 
 type Phase = "decide" | "play" | "done";
 
-/* Decided once per page load and remembered. Deciding inside an effect
-   each time broke under React's dev double-invoke: the first run marked
-   the visit seen, the second saw the mark and skipped its own intro. */
-let decision: "play" | "skip" | null = null;
-function decideOnce(): "play" | "skip" {
-  if (decision) return decision;
+/* Pure (no storage), so React's dev double-invoke can't make it disagree
+   with itself. */
+function decide(): "play" | "skip" {
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  let seen = false;
-  try {
-    seen = sessionStorage.getItem(SEEN_KEY) === "1";
-  } catch {
-    /* storage blocked — treat as first visit */
-  }
-  decision =
-    reduced || seen || document.visibilityState !== "visible" || window.location.pathname !== "/" ? "skip" : "play";
-  if (decision === "play") {
-    try {
-      sessionStorage.setItem(SEEN_KEY, "1");
-    } catch {
-      /* fine */
-    }
-  }
-  return decision;
+  return reduced || document.visibilityState !== "visible" || window.location.pathname !== "/" ? "skip" : "play";
 }
 
 export default function HomeIntro({ onDone }: { onDone: () => void }) {
-  /* Server render and the first hydration render agree on "decide" (a
-     plain black layer), so there's no flash of the page before the intro.
-     After in-app navigation the app is already mounted → straight to done. */
-  const [phase, setPhase] = useState<Phase>(() => (typeof window === "undefined" || !isAppMounted() ? "decide" : "done"));
+  /* Starts as "decide" (a plain black layer) on the server and the client
+     alike, so there's no flash of the page before the intro. */
+  const [phase, setPhase] = useState<Phase>("decide");
   const [box, setBox] = useState<{ vw: number; vh: number } | null>(null);
   const [wordW, setWordW] = useState(0);
 
@@ -106,7 +86,7 @@ export default function HomeIntro({ onDone }: { onDone: () => void }) {
   /* Decide whether to play. */
   useEffect(() => {
     if (phase !== "decide") return;
-    if (decideOnce() === "skip") finish();
+    if (decide() === "skip") finish();
     else setPhase("play");
   }, [phase, finish]);
 
@@ -143,7 +123,8 @@ export default function HomeIntro({ onDone }: { onDone: () => void }) {
     let raf = 0;
     let start: number | null = null;
     let videoStarted = false;
-    const mountedAt = performance.now();
+    /* When the screen became ours: now, or once the page transition is gone. */
+    let clearAt = transitionBusy() ? 0 : performance.now();
     const failsafe = setTimeout(finish, FAILSAFE_MS);
 
     /* Framing that puts the car inside the mark. The video element fills
@@ -196,7 +177,14 @@ export default function HomeIntro({ onDone }: { onDone: () => void }) {
     const frame = (now: number) => {
       /* Hold on black until the footage can play (or we stop waiting). */
       if (start == null) {
-        const ready = !video || video.readyState >= 3 || now - mountedAt > MAX_VIDEO_WAIT;
+        if (!clearAt) {
+          if (transitionBusy()) {
+            raf = requestAnimationFrame(frame);
+            return;
+          }
+          clearAt = now;
+        }
+        const ready = !video || video.readyState >= 3 || now - clearAt > MAX_VIDEO_WAIT;
         if (!ready) {
           raf = requestAnimationFrame(frame);
           return;

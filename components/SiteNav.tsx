@@ -39,7 +39,16 @@ export default function SiteNav() {
         />
       )}
       <div className="mx-auto flex max-w-7xl items-center gap-1.5 px-4 py-3.5 sm:px-6 2xl:max-w-[1440px]">
-        <Link href="/" className="group mr-4 flex shrink-0 items-center gap-2.5" aria-label="F1 Telemetries — home">
+        <Link
+          href="/"
+          onClick={(e) => {
+            if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+            e.preventDefault();
+            play("/", "Home");
+          }}
+          className="group mr-4 flex shrink-0 items-center gap-2.5"
+          aria-label="F1 Telemetries — home"
+        >
           {/* The mark carries "F1"; the wordmark beside it completes the name.
               Vector, and the same shape the homepage intro flies through. */}
           <F1Mark className="h-5 w-auto text-[#E80000] transition-transform duration-micro ease-out-expo group-hover:-translate-y-px sm:h-6" />
