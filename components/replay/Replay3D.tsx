@@ -2,8 +2,8 @@
 
 /**
  * The replay map in 3D — the same race as the 2D canvas, on the circuit's
- * real elevation (OpenF1 GPS height, exaggerated ELEVATION× so it reads:
- * Baku climbs ~27 m over 6 km, flat to the eye at 1×).
+ * real elevation (OpenF1 GPS height, at true scale — ELEVATION is the
+ * multiplier, 1 = real; Baku climbs ~27 m over 6 km, so it's subtle).
  *
  * It owns no state of its own: it reads RaceReplay's playback clock, focus
  * and radio refs every frame, exactly like ReplayCanvas, so switching
@@ -27,7 +27,7 @@ import type { ReplayClock } from "./ReplayCanvas";
 
 const UNIT = 100; // decimetres per scene unit (10 m)
 const TRACK_W = 2.2; // scene units — wider than the real ~1.4 so it reads
-const ELEVATION = 4;
+const ELEVATION = 1;
 /* Cars are drawn at 2× real size (metres → scene units ×0.1, then ×2):
    true scale is a speck from the overview camera. */
 const CAR_SCALE = 0.2;
