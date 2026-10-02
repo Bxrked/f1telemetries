@@ -565,7 +565,7 @@ async function jolpicaSeasonAll(path, key) {
 }
 
 const TEAM_DISPLAY = { rb: "Racing Bulls" };
-const BATTLES_KEY = "f1teammates:v1";
+const BATTLES_KEY = "f1teammates:v2";
 let battlesMemo = null;
 
 /**
@@ -595,6 +595,8 @@ export async function getTeammateBattles() {
       data.teams.forEach((t) => {
         t.color = teamColor(t.id);
         t.name = TEAM_DISPLAY[t.id] ?? t.name.replace(/ F1 Team$/, "");
+        t.a.headshot = seasonPortraitUrl(data.season, t.id, t.a);
+        t.b.headshot = seasonPortraitUrl(data.season, t.id, t.b);
       });
       battlesMemo = { expires: Date.now() + TTL.results, data };
       try {
@@ -632,8 +634,24 @@ function mockTeammates() {
   return data;
 }
 
-/* Headshots: OpenF1 gives each driver a photo URL on formula1.com. Only
-   these hosts are ever put in an <img> (and allowed by the CSP). */
+/* formula1.com's season portraits live at a predictable address:
+     common/f1/{year}/{team}/{driver}/{year}{team}{driver}right.webp
+   team = its site slug, driver = first 3 letters of given + family name
+   + "01" (accents stripped: Hülkenberg → nichul01). Checked 22/22 for the
+   2026 grid; a wrong guess is a plain 404, which the page turns into the
+   next source. The transform crops the full-body cutout to head and
+   shoulders, 256 px square (~15 kB). */
+const F1_MEDIA_TEAM = { red_bull: "redbullracing", rb: "racingbulls", haas: "haasf1team", aston_martin: "astonmartin" };
+const lettersOnly = (s) => (s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^A-Za-z]/g, "");
+function seasonPortraitUrl(season, constructorId, driver) {
+  const id = (lettersOnly(driver.given).slice(0, 3) + lettersOnly(driver.family).slice(0, 3)).toLowerCase();
+  const team = F1_MEDIA_TEAM[constructorId] ?? lettersOnly(constructorId).toLowerCase();
+  if (id.length < 6 || !team || !season) return null;
+  return `https://media.formula1.com/image/upload/c_fill,g_north,w_256,h_256/q_auto/common/f1/${season}/${team}/${id}01/${season}${team}${id}01right.webp`;
+}
+
+/* Second source: OpenF1 gives each driver a photo URL on formula1.com.
+   Only these hosts are ever put in an <img> (and allowed by the CSP). */
 const HEADSHOT_HOSTS = new Set(["media.formula1.com", "www.formula1.com"]);
 const HEADSHOT_KEY = "f1heads:v1";
 const isHeadshotUrl = (u) => {

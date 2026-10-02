@@ -118,8 +118,12 @@ function Helmet({ color, number, flip }: { color: string; number: number | null;
 }
 
 function Portrait({ driver, color, src, flip }: { driver: any; color: string; src?: string; flip: boolean }) {
-  const [failed, setFailed] = useState(false);
-  const photo = src && !failed;
+  /* Sources in order: this season's portrait, then OpenF1's photo; when
+     one fails to load the next is tried, and after the last, the helmet. */
+  const srcs = useMemo(() => [driver.headshot, src].filter(Boolean) as string[], [driver.headshot, src]);
+  const [failed, setFailed] = useState(0);
+  const current = srcs[failed];
+  const photo = !!current;
   return (
     <motion.div
       variants={panelWipe}
@@ -136,12 +140,13 @@ function Portrait({ driver, color, src, flip }: { driver: any; color: string; sr
           /* Plain <img>: remote F1 media, already small; nothing for next/image to optimise. */
           // eslint-disable-next-line @next/next/no-img-element
           <img
-            src={src}
+            key={current}
+            src={current}
             alt={driver.name}
             loading="lazy"
             decoding="async"
             referrerPolicy="no-referrer"
-            onError={() => setFailed(true)}
+            onError={() => setFailed((n) => n + 1)}
             className="h-full w-full object-cover object-top"
           />
         ) : (
