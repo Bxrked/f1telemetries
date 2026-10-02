@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { BarChart3, Radio, Swords, Trophy, ArrowRight } from "lucide-react";
+import { BarChart3, Radio, Swords, Users, Trophy, ArrowRight } from "lucide-react";
 import { getSeasonSchedule } from "@/services/f1Service";
 import { FEATURES } from "@/services/features";
 import { DUR, EASE, SPRING, PRESS, rowDelay } from "@/lib/motion";
@@ -34,6 +34,13 @@ const SECTIONS = [
     title: "Head to Head",
     desc: "Two drivers, lap by lap: pace, sectors, top speed, gap trace.",
     part: "Cockpit",
+  },
+  {
+    href: "/teammates",
+    icon: Users,
+    title: "Teammates",
+    desc: "Who beats who inside each team, across the whole season.",
+    part: "Garage",
   },
 ];
 
@@ -83,7 +90,7 @@ export default function HomeLanding() {
       <div className="fixed inset-x-0 bottom-0 z-10 px-4 pb-5 sm:px-6 sm:pb-7">
         <div className="mx-auto grid w-full max-w-4xl gap-3 sm:grid-cols-2">
           {VISIBLE_SECTIONS.map(({ href, icon: Icon, title, desc, part }, i) => (
-            <motion.div key={href} custom={i} variants={enter} initial="hidden" animate={introDone ? "show" : "hidden"}>
+            <motion.div key={href} custom={i} variants={enter} initial="hidden" animate={introDone ? "show" : "hidden"} className="min-w-0">
               <motion.div whileHover={{ y: -3 }} whileTap={PRESS} transition={SPRING.press}>
                 <Link
                   href={href}

@@ -30,6 +30,7 @@ export const ROUTE_LABELS: Record<string, string> = {
   "/telemetry": "Post-Race Telemetry",
   "/live": "Race Replay",
   "/compare": "Head-to-Head",
+  "/teammates": "Teammate Battles",
 };
 
 type Ctx = { play: (href: string, label?: string) => void };

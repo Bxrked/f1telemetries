@@ -13,5 +13,6 @@ export default function sitemap(): MetadataRoute.Sitemap {
       ? [{ url: `${SITE}/live`, lastModified: now, changeFrequency: "weekly" as const, priority: 0.8 }]
       : []),
     { url: `${SITE}/compare`, lastModified: now, changeFrequency: "weekly", priority: 0.7 },
+    { url: `${SITE}/teammates`, lastModified: now, changeFrequency: "weekly", priority: 0.7 },
   ];
 }

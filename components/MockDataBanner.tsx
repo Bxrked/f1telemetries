@@ -17,6 +17,7 @@ const FEED_LABELS: Record<string, string> = {
   worm: "position worm",
   trackOutline: "circuit map",
   compare: "head-to-head",
+  teammates: "teammate battles",
   events: "replay events",
   control: "race control",
 };

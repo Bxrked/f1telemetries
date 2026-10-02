@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion, useScroll, useSpring } from "framer-motion";
-import { Home, BarChart3, Radio, Swords, Activity } from "lucide-react";
+import { Home, BarChart3, Radio, Swords, Users, Activity } from "lucide-react";
 import { FEATURES } from "@/services/features";
 import { SPRING, PRESS } from "@/lib/motion";
 import { useCinematic } from "./RouteCinematic";
@@ -14,6 +14,7 @@ const LINKS = [
   { href: "/telemetry", label: "Post-Race Telemetry", icon: BarChart3 },
   { href: "/live", label: "Race Replay", icon: Radio },
   { href: "/compare", label: "Head-to-Head", icon: Swords },
+  { href: "/teammates", label: "Teammates", icon: Users },
 ];
 
 /* The replay tab is gated by FEATURES.raceReplay (services/features.js). */

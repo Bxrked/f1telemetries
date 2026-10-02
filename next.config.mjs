@@ -25,7 +25,7 @@ const csp = [
   "default-src 'self'",
   `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob:",
+  "img-src 'self' data: blob: https://media.formula1.com https://www.formula1.com",
   "font-src 'self' data:",
   `media-src 'self' https://livetiming.formula1.com${videoOrigin ? ` ${videoOrigin}` : ""}`,
   `connect-src 'self' https://api.openf1.org https://api.jolpi.ca${isDev ? " ws: wss:" : ""}`,

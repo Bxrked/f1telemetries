@@ -18,6 +18,7 @@ import { fetchJson } from "./apiClient";
 import { formatLapTime } from "./format";
 import { teamColorFor } from "./teamColors";
 import { fiaRaceSlug, fiaTranscriptUrl } from "./fiaTranscript";
+import { buildTeammateBattles, mergeRaces } from "./teammates";
 import {
   buildReference, buildDriverLaps, createTimeline, buildTrackStatus, detectOvertakes, isPenalty,
 } from "./replayModel";
@@ -543,6 +544,138 @@ export async function getStandings() {
       return mockStandings();
     }
   );
+}
+
+/* ================================================================
+ * TEAMMATE BATTLES (season-long, Jolpica only)
+ * ================================================================ */
+
+/** Every page of a season-wide Jolpica list (100 rows a page), stitched by round. */
+async function jolpicaSeasonAll(path, key) {
+  const page = (offset) =>
+    /* store: false — a season of results is ~600 kB of JSON; only the
+       small computed table below is kept (see getTeammateBattles). */
+    fetchJson(`${JOLPICA_BASE}/${SEASON}/${path}.json?limit=100&offset=${offset}`, { store: false, timeout: 20_000 });
+  const first = await page(0);
+  const total = +first?.MRData?.total || 0;
+  const rest = await Promise.all(
+    Array.from({ length: Math.max(0, Math.ceil(total / 100) - 1) }, (_, i) => page((i + 1) * 100))
+  );
+  return mergeRaces([first, ...rest].map((j) => j?.MRData?.RaceTable?.Races ?? []), key);
+}
+
+const TEAM_DISPLAY = { rb: "Racing Bulls" };
+const BATTLES_KEY = "f1teammates:v1";
+let battlesMemo = null;
+
+/**
+ * Who beats who inside each team, over the whole season: points, race
+ * results, qualifying, fastest laps, best result. Rules in teammates.js.
+ * The computed table (a few kB) is cached; the raw season pages are not.
+ */
+export async function getTeammateBattles() {
+  return withFallback(
+    "teammates",
+    async () => {
+      if (battlesMemo && battlesMemo.expires > Date.now()) return battlesMemo.data;
+      try {
+        const saved = JSON.parse(window.localStorage.getItem(BATTLES_KEY) ?? "null");
+        if (saved?.expires > Date.now() && saved.data?.teams?.length) return (battlesMemo = saved).data;
+      } catch {
+        /* no storage (server, private mode) — just fetch */
+      }
+      const [results, qualifying, sprints] = await Promise.all([
+        jolpicaSeasonAll("results", "Results"),
+        jolpicaSeasonAll("qualifying", "QualifyingResults"),
+        jolpicaSeasonAll("sprint", "SprintResults").catch(() => []), // a season with no sprints yet
+      ]);
+      if (!results.length) throw new Error("no race results this season yet");
+      const data = buildTeammateBattles({ results, qualifying, sprints });
+      if (!data.teams.length) throw new Error("no teammate pairs found");
+      data.teams.forEach((t) => {
+        t.color = teamColor(t.id);
+        t.name = TEAM_DISPLAY[t.id] ?? t.name.replace(/ F1 Team$/, "");
+      });
+      battlesMemo = { expires: Date.now() + TTL.results, data };
+      try {
+        window.localStorage.setItem(BATTLES_KEY, JSON.stringify(battlesMemo));
+      } catch {
+        /* quota / private mode — memory cache still holds it */
+      }
+      return data;
+    },
+    async () => {
+      await simulateLatency();
+      return mockTeammates();
+    }
+  );
+}
+
+/** Demo table from the Monaco mock: one race, so every tally is 1–0. */
+function mockTeammates() {
+  const row = (d) => {
+    const [givenName, ...rest] = d.name.split(" ");
+    return {
+      number: String(d.id), position: String(d.finish), positionText: String(d.finish), points: String(d.points),
+      Driver: { driverId: d.code.toLowerCase(), code: d.code, givenName, familyName: rest.join(" ") },
+      Constructor: { constructorId: d.team, name: TEAMS[d.team].name },
+      FastestLap: { Time: { time: `1:${(13 + d.finish * 0.11).toFixed(3)}` } },
+    };
+  };
+  const race = { season: String(SESSION.season), round: String(SESSION.round), raceName: SESSION.meetingName };
+  const data = buildTeammateBattles({
+    results: [{ ...race, Results: DRIVERS.map(row) }],
+    qualifying: [{ ...race, QualifyingResults: DRIVERS.map((d) => ({ ...row(d), position: String(d.grid) })) }],
+    sprints: [],
+  });
+  data.teams.forEach((t) => (t.color = TEAMS[t.id].color));
+  return data;
+}
+
+/* Headshots: OpenF1 gives each driver a photo URL on formula1.com. Only
+   these hosts are ever put in an <img> (and allowed by the CSP). */
+const HEADSHOT_HOSTS = new Set(["media.formula1.com", "www.formula1.com"]);
+const HEADSHOT_KEY = "f1heads:v1";
+const isHeadshotUrl = (u) => {
+  try {
+    const url = new URL(u);
+    return url.protocol === "https:" && HEADSHOT_HOSTS.has(url.host);
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Driver code → headshot URL. Decoration only, so it never throws and
+ * never touches feed status: OpenF1 shuts free access while an F1 session
+ * is live, and a driver who left mid-season isn't in the latest race. The
+ * map is therefore remembered in localStorage and only ever added to —
+ * whoever has no photo gets the drawn helmet instead.
+ */
+export async function getDriverHeadshots() {
+  let known = {};
+  try {
+    known = JSON.parse(window.localStorage.getItem(HEADSHOT_KEY) ?? "{}") ?? {};
+  } catch {
+    /* no storage — start empty */
+  }
+  for (const k of Object.keys(known)) if (!isHeadshotUrl(known[k])) delete known[k];
+  try {
+    const race = await jolpicaLatestRaceResults();
+    const { sessionKey } = await resolveOpenF1Session(race);
+    const rows = await fetchJson(`${OPENF1_BASE}/drivers?session_key=${sessionKey}`, { ttl: TTL.results });
+    for (const d of Array.isArray(rows) ? rows : []) {
+      if (d.name_acronym && isHeadshotUrl(d.headshot_url)) known[d.name_acronym] = d.headshot_url;
+    }
+    try {
+      window.localStorage.setItem(HEADSHOT_KEY, JSON.stringify(known));
+    } catch {
+      /* fine */
+    }
+  } catch (err) {
+    console.warn(`[f1Service] headshots unavailable, using what's remembered (${err?.message})`);
+  }
+  return known;
 }
 
 /** Session info: latest race identity + circuit facts + live weather. */

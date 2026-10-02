@@ -14,7 +14,7 @@ There is **no test framework, linter, or typecheck script** in this project. `np
 
 ### Diagnostic scripts
 
-Five standalone Node scripts hit the live APIs and print geometry/health reports. They are the debugging tool for this codebase — read-only, no install, no dev server:
+Six standalone Node scripts hit the live APIs and print geometry/health reports. They are the debugging tool for this codebase — read-only, no install, no dev server:
 
 ```bash
 node diag.mjs        # what OpenF1 actually returns for the track trace (loop closure, teleports, grid-vs-track bounds)
@@ -22,6 +22,7 @@ node diag2.mjs       # tests the current trace algorithm against live data
 node diag-track.mjs  # reproduces getTrackOutline() + replay dot placement, reports geometry
 LAP_M=6003 node diag-replay.mjs [session_key]  # replay lap-mode placement vs real GPS, in metres (LAP_M = circuit length)
 node diag-interviews.mjs [year slug]           # FIA transcript parser against fia.com (e.g. 2026 monaco)
+node diag-teammates.mjs [season]               # teammate battle tables from the live season (default: current)
 ```
 
 Reach for these before touching track-tracing or replay coordinate code. They exist because that code failed in ways only visible against real API responses.
@@ -97,6 +98,15 @@ The F1 mark is a hole in a black layer; the real hero video shows through it, re
 ### Page transitions (`components/RouteCinematic.tsx`)
 
 `useCinematic().play(href, label)` — nav links and the home cards call it (modifier clicks stay native). Two fat SVG strokes (F1 red, then carbon) are drawn along one S-shaped racing line with a moving dash, three top-down cars riding the leading edge; once covered, the destination name shows, the route changes, and the sweep waits for the new pathname (≥380 ms so the name can be read, ≤4 s) before the tails chase the heads off. Stroke width 1500 in a 1600×1000 `slice` box covers any aspect — re-check coverage (`isPointInStroke` over a grid) if the line or width changes. Portrait screens turn the box 90° so the sweep runs the long way. Reduced motion: plain navigation. Labels: `ROUTE_LABELS`.
+
+### Teammate battles (`/teammates`)
+
+Season-long head-to-head inside each team. `services/teammates.js` is pure (no fetch, no React) so `diag-teammates.mjs` prints the same tables from the live season — run it before changing a rule.
+
+- **Jolpica only** (`/results`, `/qualifying`, `/sprint`, paged 100 rows at a time and stitched by round with `mergeRaces` — a race can straddle a page). Raw pages are fetched `store: false` (~600 kB a season); only the computed table is cached (`f1teammates:v1`, 6 h).
+- **Rules:** the pair is the two drivers with the most races started together (others are listed as "also drove", not compared). Race result counts only races **both were classified** in; qualifying and fastest lap only where both set one; sprints add to points, never to the race tally. The driver ahead (rows won, then points) takes the left seat.
+- **Headshots are decoration.** `getDriverHeadshots()` reads OpenF1's `headshot_url`, keeps only https URLs on `media.formula1.com` / `www.formula1.com` (the two hosts the CSP `img-src` allows), never throws and never touches feed status. **OpenF1 refuses all unauthenticated requests — past sessions included — while an F1 session is live** (401, no CORS header), so the map is remembered in localStorage (`f1heads:v1`) and only added to. No photo → the drawn team-colour helmet. Photos are never mirrored; helmets are, so both face the middle.
+- Motion per card, in reading order: card rises → portrait panels wipe up → score counts (`CountUp`) → bars grow from the centre row by row. Row figures stay static. Sorting reorders cards with framer `layout`.
 
 ### Progressive loading
 
