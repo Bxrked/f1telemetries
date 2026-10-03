@@ -82,18 +82,25 @@ export default function DriverSide({
   const [noPhoto, setNoPhoto] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const left = side < 0;
-  /* The flag is strongest at the outer edge and gone by the middle and
-     the floor, so it reads as a backdrop rather than a panel. Two nested
-     single masks: mask-composite isn't dependable across browsers. */
-  const fadeX = `linear-gradient(to ${left ? "right" : "left"}, #000 0%, transparent 80%)`;
-  const fadeY = "linear-gradient(to bottom, #000 40%, transparent 95%)";
+  /* The WHOLE flag, at its own 4:3 shape, across the top of the column
+     behind the driver's head and shoulders. Filling the tall column with
+     it (object-cover) cropped every flag to a slice — France read as blue
+     and grey, Monaco as a red wash. Only its inner and lower edges are
+     feathered, so the full design stays recognisable. Two nested single
+     masks: mask-composite isn't dependable across browsers. */
+  const fadeX = `linear-gradient(to ${left ? "right" : "left"}, #000 72%, transparent 100%)`;
+  const fadeY = "linear-gradient(to bottom, #000 58%, transparent 100%)";
   return (
     <div className={`relative min-h-0 overflow-hidden ${className}`}>
       {driver.flag && (
-        <motion.div variants={flagWipe(side)} className="absolute inset-0" style={{ maskImage: fadeX, WebkitMaskImage: fadeX }}>
+        <motion.div
+          variants={flagWipe(side)}
+          className="absolute inset-x-0 top-0 aspect-[4/3]"
+          style={{ maskImage: fadeX, WebkitMaskImage: fadeX }}
+        >
           <div className="h-full w-full" style={{ maskImage: fadeY, WebkitMaskImage: fadeY }}>
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={driver.flag} alt="" className="h-full w-full object-cover opacity-50" />
+            <img src={driver.flag} alt="" className="h-full w-full object-fill opacity-60" />
           </div>
         </motion.div>
       )}
