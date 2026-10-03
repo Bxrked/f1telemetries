@@ -4,10 +4,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { ChevronUp, ChevronDown } from "lucide-react";
 import { getTeammateBattles, getFeedStatus } from "@/services/f1Service";
-import { DUR, EASE, SPRING, rowDelay } from "@/lib/motion";
+import { EASE, SPRING, rowDelay } from "@/lib/motion";
 import { useForceVisible } from "./MotionProvider";
 import MockDataBanner from "./MockDataBanner";
 import CountUp from "./CountUp";
+import DriverSide from "./DriverCutout";
 
 /**
  * Teammate battles — one team per screen, the whole season so far.
@@ -26,11 +27,6 @@ import CountUp from "./CountUp";
 
 const slug = (id: string) => id.replace(/_/g, "-");
 const pad = (n: number) => String(n).padStart(2, "0");
-const isLight = (hex: string) => {
-  const n = parseInt(hex.slice(1), 16);
-  return ((n >> 16) & 255) * 0.299 + ((n >> 8) & 255) * 0.587 + (n & 255) * 0.114 > 150;
-};
-
 /* Wheel: a step needs this much travel. After one, the wheel is ignored
    until it has been quiet for a moment — a single trackpad flick keeps
    sending inertia events for a second or more, and a fixed lock let the
@@ -40,25 +36,8 @@ const WHEEL_QUIET_MS = 160;
 const STEP_LOCK_MS = 500;
 const SWIPE_PX = 48;
 
-/* ---- Motion. `side` is -1 for the left driver, 1 for the right; `dir`
-   is 1 stepping forward, -1 back. ---- */
-/* Built per side rather than read from `custom`: while a screen exits,
-   AnimatePresence hands every child ITS custom (the step direction). */
-const flagWipe = (side: number) => ({
-  enter: { clipPath: side < 0 ? "inset(0% 100% 0% 0%)" : "inset(0% 0% 0% 100%)", opacity: 1 },
-  show: { clipPath: "inset(0% 0% 0% 0%)", opacity: 1, transition: { duration: 0.7, ease: EASE.out } },
-  exit: { opacity: 0, transition: { duration: 0.22, ease: EASE.in } },
-});
-const driverSlide = (side: number) => ({
-  enter: { x: side * 70, opacity: 0 },
-  show: { x: 0, opacity: 1, transition: { duration: 0.6, ease: EASE.out, delay: 0.08 } },
-  exit: { x: side * 40, opacity: 0, transition: { duration: 0.22, ease: EASE.in } },
-});
-const labelRise = {
-  enter: { y: 16, opacity: 0 },
-  show: { y: 0, opacity: 1, transition: { duration: DUR.layout, ease: EASE.out, delay: 0.22 } },
-  exit: { opacity: 0, transition: { duration: DUR.exit, ease: EASE.in } },
-};
+/* ---- Motion. `dir` is 1 stepping forward, -1 back. (The drivers and
+   flags animate inside DriverSide.) ---- */
 const centreStep = {
   enter: (dir: number) => ({ y: dir * 34, opacity: 0 }),
   show: { y: 0, opacity: 1, transition: { duration: 0.5, ease: EASE.out, delay: 0.05 } },
@@ -68,96 +47,6 @@ const barGrow = (i: number) => ({
   enter: { scaleX: 0 },
   show: { scaleX: 1, transition: { duration: 0.6, ease: EASE.out, delay: 0.3 + rowDelay(i) * 2 } },
 });
-
-/** Drawn helmet in team colour — shown when a driver has no portrait. */
-function Helmet({ color, number, flip }: { color: string; number: number | null; flip: boolean }) {
-  const ink = isLight(color) ? "#0B0C0F" : "#F2F3F5";
-  return (
-    <svg viewBox="0 0 100 100" className="h-full w-full" aria-hidden>
-      <g transform={flip ? "translate(100 0) scale(-1 1)" : undefined}>
-        <path d="M16 63 C16 33 39 16 62 18 C82 20 91 38 88 55 L86 67 C84 77 74 83 60 83 L33 83 C23 83 16 75 16 63 Z" fill={color} />
-        <path d="M20 50 C26 30 44 21 62 22" fill="none" stroke={ink} strokeWidth={3} strokeLinecap="round" opacity={0.55} />
-        <path d="M52 41 L87 45 L86 59 L57 61 C50 58 48 47 52 41 Z" fill="#0B0C0F" />
-        <path d="M56 45 L83 48" stroke="#FFFFFF" strokeWidth={1.6} strokeLinecap="round" opacity={0.35} />
-        <path d="M33 83 L60 83 C68 83 75 81 80 77 L44 74 Z" fill="#0B0C0F" opacity={0.35} />
-      </g>
-      {number != null && (
-        <text x={flip ? 66 : 34} y={66} textAnchor="middle" fill={ink} style={{ font: "700 15px var(--font-timing), monospace" }}>
-          {number}
-        </text>
-      )}
-    </svg>
-  );
-}
-
-/** One driver: flag behind, cutout in front, name over the faded waist. */
-function Side({ driver, color, side, ahead, className }: { driver: any; color: string; side: -1 | 1; ahead: boolean; className: string }) {
-  const [noPhoto, setNoPhoto] = useState(false);
-  const [loaded, setLoaded] = useState(false);
-  const left = side < 0;
-  /* The flag is strongest at the outer edge and gone by the middle and
-     the floor, so it reads as a backdrop rather than a panel. Two nested
-     single masks: mask-composite isn't dependable across browsers. */
-  const fadeX = `linear-gradient(to ${left ? "right" : "left"}, #000 0%, transparent 80%)`;
-  const fadeY = "linear-gradient(to bottom, #000 40%, transparent 95%)";
-  return (
-    <div className={`relative min-h-0 overflow-hidden ${className}`}>
-      {driver.flag && (
-        <motion.div
-          variants={flagWipe(side)}
-          className="absolute inset-0"
-          style={{ maskImage: fadeX, WebkitMaskImage: fadeX }}
-        >
-          <div className="h-full w-full" style={{ maskImage: fadeY, WebkitMaskImage: fadeY }}>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={driver.flag} alt="" className="h-full w-full object-cover opacity-50" />
-          </div>
-        </motion.div>
-      )}
-
-      <motion.div variants={driverSlide(side)} className="absolute inset-x-0 bottom-0 top-[6%] flex items-end justify-center">
-        {driver.portrait && !noPhoto ? (
-          /* Plain <img>: remote F1 media, already sized by their image server. */
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={driver.portrait}
-            alt={driver.name}
-            decoding="async"
-            referrerPolicy="no-referrer"
-            onLoad={() => setLoaded(true)}
-            onError={() => setNoPhoto(true)}
-            className={`h-full max-w-none object-contain object-bottom transition-opacity duration-500 ${loaded ? "opacity-100" : "opacity-0"}`}
-            style={{
-              /* The cutout stops at the waist — dissolve it into the floor. */
-              maskImage: "linear-gradient(to bottom, #000 62%, transparent 98%)",
-              WebkitMaskImage: "linear-gradient(to bottom, #000 62%, transparent 98%)",
-            }}
-          />
-        ) : (
-          <div className="mb-[22%] aspect-square h-[46%]">
-            <Helmet color={color} number={driver.number} flip={!left} />
-          </div>
-        )}
-      </motion.div>
-
-      {/* Floor scrim: keeps the name readable over sponsor logos. */}
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-[34%] bg-gradient-to-t from-black via-black/75 to-transparent" />
-
-      <motion.div
-        variants={labelRise}
-        className={`absolute inset-x-0 bottom-3 px-3 sm:px-6 lg:bottom-16 lg:px-10 ${left ? "text-left" : "text-right lg:pr-28"}`}
-      >
-        <p
-          className={`font-display text-4xl font-black uppercase italic leading-none tracking-tight sm:text-6xl xl:text-7xl ${ahead ? "text-carbon-100" : "text-carbon-300"}`}
-        >
-          {driver.code}
-        </p>
-        <p className="mt-1 truncate text-data text-carbon-200 sm:text-label">{driver.name}</p>
-        {driver.nationality && <p className="eyebrow mt-1 hidden sm:block">{driver.nationality}</p>}
-      </motion.div>
-    </div>
-  );
-}
 
 function Row({ row, color, i, a, b }: { row: any; color: string; i: number; a: string; b: string }) {
   const max = Math.max(row.a, row.b);
@@ -201,7 +90,7 @@ function Screen({ team, index, data, dir }: { team: any; index: number; data: an
       className="absolute inset-0 grid grid-cols-2 grid-rows-[minmax(0,40%)_minmax(0,1fr)]
         lg:grid-cols-[minmax(0,1fr)_minmax(0,430px)_minmax(0,1fr)] lg:grid-rows-1"
     >
-      <Side driver={team.a} color={team.color} side={-1} ahead={team.score.a >= team.score.b} className="col-start-1 row-start-1" />
+      <DriverSide driver={team.a} color={team.color} side={-1} ahead={team.score.a >= team.score.b} className="col-start-1 row-start-1" />
 
       <motion.section
         custom={dir}
@@ -249,7 +138,7 @@ function Screen({ team, index, data, dir }: { team: any; index: number; data: an
         )}
       </motion.section>
 
-      <Side driver={team.b} color={team.color} side={1} ahead={team.score.b > team.score.a} className="col-start-2 row-start-1 lg:col-start-3" />
+      <DriverSide driver={team.b} color={team.color} side={1} ahead={team.score.b > team.score.a} className="col-start-2 row-start-1 lg:col-start-3" />
     </motion.div>
   );
 }

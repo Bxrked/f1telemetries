@@ -111,6 +111,16 @@ Season-long head-to-head inside each team, **one team per screen**. `services/te
 - Per-side motion variants are built by function, not read from `custom`: during an exit AnimatePresence passes its own `custom` (the step direction) to every child.
 - The nav shows tab names from `lg` up and icons below: with five tabs the names wrapped at 1280.
 
+### Head-to-Head (`/compare`)
+
+Any two drivers from the latest race, in the Teammates visual language. The first screen is the verdict (`DriverSide` cutouts + flags, rows won, five headline rows); a strip of the whole field swaps either side; below, the page scrolls through numbered, unboxed sections (pace, race execution, lap trace, cumulative gap, lap duel, strategy) — the charts need the width, so unlike Teammates this page scrolls.
+
+- **Picking:** "Left/Right" (or a side's Change button) chooses which side the next chip replaces. The address carries the pairing (`#rus-ver`) and opens on it; default is P1 v P2.
+- **Colour:** each driver wears their team colour; for two drivers of the same team the right-hand one takes a neutral (`ALT_LIGHT`/`ALT_DARK`). The old fixed purple/green is gone.
+- **Rows are data** (`RowDef`): `lower` = lower is better, `neutral` = no winner (e.g. "best lap on"), `scale` = the difference that counts as a lot for that metric. With a `scale` the winner's bar is full and the other shortens with the gap — a 0.05 s deficit must not look like half; without it bars are proportional (counts). The headline "rows won" counts only the five headline rows.
+- `components/DriverCutout.tsx` is shared with Teammates (cutout, flag fade, helmet fallback, enter/show/exit variants inherited from the parent). `getDriverComparison` adds `portrait`, `thumb` (96 px face for the strip), `flag`, `nationality`, and the race identity; names use Jolpica's spelling (OpenF1 capitalises the surname).
+- Data is OpenF1, so during a live F1 session the page falls back to demo data (no portraits there — helmets).
+
 ### Progressive loading
 
 `TelemetryDashboard` fires all ~12 feeds independently and paints each panel as its data lands, rather than awaiting the slowest. Cheap Jolpica feeds are launched first for perceived speed. Panels render `PanelLoading` until their key is populated.

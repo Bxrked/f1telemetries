@@ -650,11 +650,19 @@ function mockTeammates() {
    transform crops it from the top to the waist, 560×760 (~40 kB). */
 const F1_MEDIA_TEAM = { red_bull: "redbullracing", rb: "racingbulls", haas: "haasf1team", aston_martin: "astonmartin" };
 const lettersOnly = (s) => (s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^A-Za-z]/g, "");
-function seasonPortraitUrl(season, constructorId, driver) {
+function seasonPortraitUrl(season, constructorId, driver, transform = "c_fill,g_north,w_560,h_760") {
   const id = (lettersOnly(driver.given).slice(0, 3) + lettersOnly(driver.family).slice(0, 3)).toLowerCase();
   const team = F1_MEDIA_TEAM[constructorId] ?? lettersOnly(constructorId).toLowerCase();
   if (id.length < 6 || !team || !season) return null;
-  return `https://media.formula1.com/image/upload/c_fill,g_north,w_560,h_760/q_auto/common/f1/${season}/${team}/${id}01/${season}${team}${id}01right.webp`;
+  return `https://media.formula1.com/image/upload/${transform}/q_auto/common/f1/${season}/${team}/${id}01/${season}${team}${id}01right.webp`;
+}
+/** Waist-up cutout + a 96 px face thumbnail (~3 kB) from a Jolpica Driver object. */
+function seasonPortraits(season, constructorId, Driver) {
+  const d = { given: Driver.givenName, family: Driver.familyName };
+  return {
+    portrait: seasonPortraitUrl(season, constructorId, d),
+    thumb: seasonPortraitUrl(season, constructorId, d, "c_fill,g_north,w_96,h_96"),
+  };
 }
 
 /* Driver nationality (Jolpica's demonym) → flag file in public/flags
@@ -1733,9 +1741,14 @@ export async function getDriverComparison() {
           const res = resultByNum[num];
           return {
             code: id.code ?? String(num),
-            name: id.name ?? `#${num}`,
+            /* Jolpica's spelling ("George Russell"); OpenF1 shouts the surname. */
+            name: res ? `${res.Driver.givenName} ${res.Driver.familyName}` : id.name ?? `#${num}`,
             teamName: id.teamName ?? "—",
             teamColor: id.teamColor ?? "#8B95A7",
+            number: num,
+            nationality: res?.Driver?.nationality || null,
+            flag: FLAG_CODES[res?.Driver?.nationality] ? `/flags/${FLAG_CODES[res.Driver.nationality]}.svg` : null,
+            ...(res ? seasonPortraits(race.season, res.Constructor.constructorId, res.Driver) : {}),
             grid: res ? (+res.grid === 0 ? finishOrder.length : +res.grid) : null,
             finish: res ? +res.position : null,
             status: res?.status ?? "—",
@@ -1767,7 +1780,7 @@ export async function getDriverComparison() {
         })
         .filter(Boolean);
       if (rows.length < 2) throw new Error("too few drivers for comparison");
-      return { totalLaps, drivers: rows };
+      return { totalLaps, drivers: rows, raceName: race.raceName, season: +race.season, round: +race.round };
     },
     async () => {
       await simulateLatency();
@@ -1800,6 +1813,7 @@ export async function getDriverComparison() {
             name: d.name,
             teamName: TEAMS[d.team].name,
             teamColor: TEAMS[d.team].color,
+            number: d.id,
             grid: d.grid,
             finish: d.finish,
             status: "Finished",
@@ -1814,7 +1828,7 @@ export async function getDriverComparison() {
             pits: PIT_STOPS.filter((p) => p.code === d.code).map((p) => ({ lap: p.lap, laneTime: p.laneTime })),
           };
         });
-      return { totalLaps: total, drivers: rows };
+      return { totalLaps: total, drivers: rows, raceName: SESSION.meetingName, season: SESSION.season, round: SESSION.round };
     }
   );
 }
