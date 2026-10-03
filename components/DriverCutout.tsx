@@ -19,9 +19,12 @@ export const isLight = (hex: string) => {
   return ((n >> 16) & 255) * 0.299 + ((n >> 8) & 255) * 0.587 + (n & 255) * 0.114 > 150;
 };
 
+/* Opacity + a short drift only. An animated clip-path repaints the flag
+   every frame, and some flags (Spain, Mexico, Brazil) are 80 kB of vector
+   detail — that was the stutter when swapping drivers. */
 const flagWipe = (side: number) => ({
-  enter: { clipPath: side < 0 ? "inset(0% 100% 0% 0%)" : "inset(0% 0% 0% 100%)", opacity: 1 },
-  show: { clipPath: "inset(0% 0% 0% 0%)", opacity: 1, transition: { duration: 0.7, ease: EASE.out } },
+  enter: { x: side * 28, opacity: 0 },
+  show: { x: 0, opacity: 1, transition: { duration: 0.6, ease: EASE.out } },
   exit: { opacity: 0, transition: { duration: 0.22, ease: EASE.in } },
 });
 const driverSlide = (side: number) => ({
@@ -100,12 +103,16 @@ export default function DriverSide({
         >
           <div className="h-full w-full" style={{ maskImage: fadeY, WebkitMaskImage: fadeY }}>
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={driver.flag} alt="" className="h-full w-full object-fill opacity-60" />
+            {/* Its own layer: drawn once, then only moved and faded. */}
+            <img src={driver.flag} alt="" decoding="async" className="h-full w-full object-fill opacity-60 [transform:translateZ(0)]" />
           </div>
         </motion.div>
       )}
 
-      <motion.div variants={driverSlide(side)} className="absolute inset-x-0 bottom-0 top-[6%] flex items-end justify-center">
+      <motion.div
+        variants={driverSlide(side)}
+        className="absolute inset-x-0 bottom-0 top-[6%] flex items-end justify-center [will-change:transform,opacity]"
+      >
         {driver.portrait && !noPhoto ? (
           /* Plain <img>: remote F1 media, already sized by their image server. */
           // eslint-disable-next-line @next/next/no-img-element

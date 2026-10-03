@@ -1,6 +1,6 @@
 "use client";
 
-import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ReactNode, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer } from "recharts";
 import { ChevronDown } from "lucide-react";
@@ -30,6 +30,13 @@ import { useForceVisible } from "./MotionProvider";
 
 const ALT_LIGHT = "#E7EAF0";
 const ALT_DARK = "#5B8CFF";
+function pairColours(A: any, B: any) {
+  const colA: string = A?.teamColor ?? "#8B95A7";
+  const colB: string = !B ? "#8B95A7" : B.teamColor !== colA ? B.teamColor : isLight(colA) ? ALT_DARK : ALT_LIGHT;
+  return { colA, colB };
+}
+/* The swap animation runs ~0.9 s (old driver out, new one in). */
+const DETAIL_DELAY_MS = 900;
 
 const fmtLap = (s: number | null) => (s == null ? "—" : formatClock(s, 3));
 
@@ -324,10 +331,13 @@ function DuelRow({ row, colA, colB, dense = false }: { row: RowDef; colA: string
   const [fa, fb] = fills(row);
   const bar = (side: "a" | "b") => (
     <span className={`relative block bg-carbon-800 ${dense ? "h-[4px]" : "h-[6px]"}`}>
+      {/* scaleX, not width: 26 bars re-laying-out the page every frame
+          was part of the swap stutter. */}
       <motion.span
-        className={`absolute inset-y-0 ${side === "a" ? "right-0" : "left-0"}`}
-        initial={{ width: "0%" }}
-        animate={{ width: `${(side === "a" ? fa : fb) * 100}%`, backgroundColor: w === side ? (side === "a" ? colA : colB) : "#3A4352" }}
+        className={`absolute inset-0 ${side === "a" ? "origin-right" : "origin-left"}`}
+        style={{ backgroundColor: w === side ? (side === "a" ? colA : colB) : "#3A4352" }}
+        initial={{ scaleX: 0 }}
+        animate={{ scaleX: side === "a" ? fa : fb }}
         transition={{ duration: 0.6, ease: EASE.out }}
       />
     </span>
@@ -436,6 +446,75 @@ function Chip({ d, slot, color, disabled, onPick }: { d: any; slot: "a" | "b" | 
 
 const sideSwap = { initial: "enter", animate: "show", exit: "exit" } as const;
 
+/** Everything derived from a pairing: gap trace, lap duel, and the rows. */
+function analyse(A: any, B: any) {
+  /* Cumulative gap: +ve = A ahead. Only laps both completed. */
+  const gapSeries = (() => {
+    const bLap: Record<number, number> = {};
+    B.laps.forEach((l: any) => (bLap[l.n] = l.d));
+    let cumA = 0, cumB = 0;
+    const out: any[] = [];
+    for (const l of A.laps) {
+      if (bLap[l.n] == null) break;
+      cumA += l.d;
+      cumB += bLap[l.n];
+      out.push({ lap: l.n, gap: +(cumB - cumA).toFixed(2) });
+    }
+    return out;
+  })();
+
+  /* Lap duel: 18 sampled common laps (skip laps 1-2). */
+  const duel = (() => {
+    const bLap: Record<number, number> = {};
+    B.laps.forEach((l: any) => (bLap[l.n] = l.d));
+    const common = A.laps.filter((l: any) => l.n > 2 && bLap[l.n] != null);
+    if (common.length < 6) return [];
+    const step = (common.length - 1) / 17;
+    return Array.from({ length: 18 }, (_, i) => {
+      const l = common[Math.round(i * step)];
+      const diff = l.d - bLap[l.n];
+      return { lap: l.n, w: Math.abs(diff) <= 0.05 ? "EQ" : diff < 0 ? "A" : "B" };
+    });
+  })();
+
+  {
+    const secs = (n: number) => (d: number) => `${d.toFixed(n)}s`;
+    const pos = (v: number) => `P${v}`;
+    const flag = gapAtFlag(gapSeries);
+    const headline: RowDef[] = [
+      { label: "Finish", a: A.finish, b: B.finish, fmt: pos, lower: true, scale: 10, delta: (d) => `${d} ${d === 1 ? "place" : "places"}` },
+      { label: "Best lap", a: A.bestLap, b: B.bestLap, fmt: fmtLap, lower: true, scale: 1, delta: secs(3) },
+      { label: "Race pace", a: medianLap(A), b: medianLap(B), fmt: fmtLap, lower: true, scale: 1, delta: secs(3) },
+      { label: "Top speed", a: A.vmax, b: B.vmax, fmt: (v) => `${v}`, scale: 15, delta: (d) => `${d.toFixed(1)} km/h` },
+      { label: "Laps ahead", a: lapsAhead(gapSeries, "a"), b: lapsAhead(gapSeries, "b"), fmt: (v) => `${v}` },
+    ];
+    const pace: RowDef[] = [
+      { label: "Grid", a: A.grid, b: B.grid, fmt: pos, lower: true, scale: 10 },
+      { label: "Theoretical best", a: theoretical(A), b: theoretical(B), fmt: fmtLap, lower: true, scale: 1 },
+      { label: "Left on table", a: leftOnTable(A), b: leftOnTable(B), fmt: (v) => `+${v.toFixed(3)}s`, lower: true, scale: 0.6 },
+      { label: "Avg pace", a: A.avgPace, b: B.avgPace, fmt: fmtLap, lower: true, scale: 1 },
+      { label: "Consistency", a: consistency(A), b: consistency(B), fmt: secs(3), lower: true, scale: 0.6 },
+      { label: "Best sector 1", a: A.s1, b: B.s1, fmt: secs(3), lower: true, scale: 0.5 },
+      { label: "Best sector 2", a: A.s2, b: B.s2, fmt: secs(3), lower: true, scale: 0.5 },
+      { label: "Best sector 3", a: A.s3, b: B.s3, fmt: secs(3), lower: true, scale: 0.5 },
+      { label: "Laps at limit", a: lapsAtLimit(A), b: lapsAtLimit(B), fmt: (v) => `${v}` },
+    ];
+    const execution: RowDef[] = [
+      { label: "Places gained", a: placesGained(A), b: placesGained(B), fmt: (v) => (v > 0 ? `+${v}` : `${v}`), scale: 8 },
+      { label: "Pit stops", a: A.pits.length, b: B.pits.length, fmt: (v) => `${v}`, lower: true, scale: 3 },
+      { label: "Pit lane total", a: pitLaneTotal(A), b: pitLaneTotal(B), fmt: secs(1), lower: true, scale: 30 },
+      { label: "Longest stint", a: longestStint(A), b: longestStint(B), fmt: (v) => `${v} laps` },
+      /* Which lap, not how good — it describes the race, it doesn't rank. */
+      { label: "Best lap on", a: bestLapNumber(A), b: bestLapNumber(B), fmt: (v) => `L${v}`, neutral: true },
+      { label: "Best lap gain", a: biggestLapGain(A, B, "a"), b: biggestLapGain(A, B, "b"), fmt: secs(3) },
+      /* Signed per driver so BOTH ends carry a real number. */
+      { label: "Gap at flag", a: flag, b: flag == null ? null : -flag, fmt: (v) => `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(2)}s`, scale: 30 },
+    ];
+    const won = (side: "a" | "b") => headline.filter((r) => winnerOf(r) === side).length;
+    return { gapSeries, duel, headline, pace, execution, score: { a: won("a"), b: won("b") } };
+  }
+}
+
 export default function ComparePage() {
   const [data, setData] = useState<any>(null);
   const [feed, setFeed] = useState<any>(null);
@@ -478,77 +557,20 @@ export default function ComparePage() {
 
   const A = data?.drivers.find((d: any) => d.code === codeA);
   const B = data?.drivers.find((d: any) => d.code === codeB);
-  const colA: string = A?.teamColor ?? "#8B95A7";
-  const colB: string = !B ? "#8B95A7" : B.teamColor !== colA ? B.teamColor : isLight(colA) ? ALT_DARK : ALT_LIGHT;
+  const { colA, colB } = pairColours(A, B);
 
-  /* Cumulative gap: +ve = A ahead. Only laps both completed. */
-  const gapSeries = useMemo(() => {
-    if (!A || !B) return [];
-    const bLap: Record<number, number> = {};
-    B.laps.forEach((l: any) => (bLap[l.n] = l.d));
-    let cumA = 0, cumB = 0;
-    const out: any[] = [];
-    for (const l of A.laps) {
-      if (bLap[l.n] == null) break;
-      cumA += l.d;
-      cumB += bLap[l.n];
-      out.push({ lap: l.n, gap: +(cumB - cumA).toFixed(2) });
-    }
-    return out;
-  }, [A, B]);
-
-  /* Lap duel: 18 sampled common laps (skip laps 1-2). */
-  const duel = useMemo(() => {
-    if (!A || !B) return [];
-    const bLap: Record<number, number> = {};
-    B.laps.forEach((l: any) => (bLap[l.n] = l.d));
-    const common = A.laps.filter((l: any) => l.n > 2 && bLap[l.n] != null);
-    if (common.length < 6) return [];
-    const step = (common.length - 1) / 17;
-    return Array.from({ length: 18 }, (_, i) => {
-      const l = common[Math.round(i * step)];
-      const diff = l.d - bLap[l.n];
-      return { lap: l.n, w: Math.abs(diff) <= 0.05 ? "EQ" : diff < 0 ? "A" : "B" };
-    });
-  }, [A, B]);
-
-  const rows = useMemo(() => {
-    if (!A || !B) return null;
-    const secs = (n: number) => (d: number) => `${d.toFixed(n)}s`;
-    const pos = (v: number) => `P${v}`;
-    const flag = gapAtFlag(gapSeries);
-    const headline: RowDef[] = [
-      { label: "Finish", a: A.finish, b: B.finish, fmt: pos, lower: true, scale: 10, delta: (d) => `${d} ${d === 1 ? "place" : "places"}` },
-      { label: "Best lap", a: A.bestLap, b: B.bestLap, fmt: fmtLap, lower: true, scale: 1, delta: secs(3) },
-      { label: "Race pace", a: medianLap(A), b: medianLap(B), fmt: fmtLap, lower: true, scale: 1, delta: secs(3) },
-      { label: "Top speed", a: A.vmax, b: B.vmax, fmt: (v) => `${v}`, scale: 15, delta: (d) => `${d.toFixed(1)} km/h` },
-      { label: "Laps ahead", a: lapsAhead(gapSeries, "a"), b: lapsAhead(gapSeries, "b"), fmt: (v) => `${v}` },
-    ];
-    const pace: RowDef[] = [
-      { label: "Grid", a: A.grid, b: B.grid, fmt: pos, lower: true, scale: 10 },
-      { label: "Theoretical best", a: theoretical(A), b: theoretical(B), fmt: fmtLap, lower: true, scale: 1 },
-      { label: "Left on table", a: leftOnTable(A), b: leftOnTable(B), fmt: (v) => `+${v.toFixed(3)}s`, lower: true, scale: 0.6 },
-      { label: "Avg pace", a: A.avgPace, b: B.avgPace, fmt: fmtLap, lower: true, scale: 1 },
-      { label: "Consistency", a: consistency(A), b: consistency(B), fmt: secs(3), lower: true, scale: 0.6 },
-      { label: "Best sector 1", a: A.s1, b: B.s1, fmt: secs(3), lower: true, scale: 0.5 },
-      { label: "Best sector 2", a: A.s2, b: B.s2, fmt: secs(3), lower: true, scale: 0.5 },
-      { label: "Best sector 3", a: A.s3, b: B.s3, fmt: secs(3), lower: true, scale: 0.5 },
-      { label: "Laps at limit", a: lapsAtLimit(A), b: lapsAtLimit(B), fmt: (v) => `${v}` },
-    ];
-    const execution: RowDef[] = [
-      { label: "Places gained", a: placesGained(A), b: placesGained(B), fmt: (v) => (v > 0 ? `+${v}` : `${v}`), scale: 8 },
-      { label: "Pit stops", a: A.pits.length, b: B.pits.length, fmt: (v) => `${v}`, lower: true, scale: 3 },
-      { label: "Pit lane total", a: pitLaneTotal(A), b: pitLaneTotal(B), fmt: secs(1), lower: true, scale: 30 },
-      { label: "Longest stint", a: longestStint(A), b: longestStint(B), fmt: (v) => `${v} laps` },
-      /* Which lap, not how good — it describes the race, it doesn't rank. */
-      { label: "Best lap on", a: bestLapNumber(A), b: bestLapNumber(B), fmt: (v) => `L${v}`, neutral: true },
-      { label: "Best lap gain", a: biggestLapGain(A, B, "a"), b: biggestLapGain(A, B, "b"), fmt: secs(3) },
-      /* Signed per driver so BOTH ends carry a real number. */
-      { label: "Gap at flag", a: flag, b: flag == null ? null : -flag, fmt: (v) => `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(2)}s`, scale: 30 },
-    ];
-    const won = (side: "a" | "b") => headline.filter((r) => winnerOf(r) === side).length;
-    return { headline, pace, execution, score: { a: won("a"), b: won("b") } };
-  }, [A, B, gapSeries]);
+  /* The verdict follows a pick at once; the breakdown follows a beat
+     later (see DETAIL_DELAY_MS), so its charts don't rebuild mid-swap. */
+  const now = useMemo(() => (A && B ? analyse(A, B) : null), [A, B]);
+  const rows = now;
+  const [detail, setDetail] = useState<{ a: string; b: string } | null>(null);
+  useEffect(() => {
+    if (!codeA || !codeB) return;
+    if (!detail) return setDetail({ a: codeA, b: codeB });
+    const t = setTimeout(() => setDetail({ a: codeA, b: codeB }), DETAIL_DELAY_MS);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [codeA, codeB]);
 
   if (!data || !A || !B || !rows) {
     return (
@@ -561,8 +583,6 @@ export default function ComparePage() {
     );
   }
 
-  const mock = feed?.detail?.compare === "mock";
-  const { lo, hi } = traceRange(A.laps, B.laps);
   const words = String(data.raceName ?? "Latest race").split(" ");
   const sideMeta = (d: any) => `P${d.finish} · ${d.teamName}`;
 
@@ -690,6 +710,30 @@ export default function ComparePage() {
         </div>
       </section>
 
+      <Breakdown
+        data={data}
+        feed={feed}
+        A={data.drivers.find((d: any) => d.code === detail?.a) ?? A}
+        B={data.drivers.find((d: any) => d.code === detail?.b) ?? B}
+        forceVisible={forceVisible}
+      />
+    </main>
+  );
+}
+
+/**
+ * Everything below the first screen. Memoised, and fed the pairing a beat
+ * after the pick: rebuilding six sections and replaying the gap chart in
+ * the same frames as the driver swap is what made the swap stutter.
+ */
+const Breakdown = memo(function Breakdown({ data, feed, A, B, forceVisible }: { data: any; feed: any; A: any; B: any; forceVisible: boolean }) {
+  const { colA, colB } = pairColours(A, B);
+  const an = useMemo(() => analyse(A, B), [A, B]);
+  const { gapSeries, duel } = an;
+  const mock = feed?.detail?.compare === "mock";
+  const { lo, hi } = traceRange(A.laps, B.laps);
+  return (
+    <>
       {/* ── The breakdown ─────────────────────────────────────────────── */}
       <div className="mx-auto w-full max-w-6xl px-4 pb-20 pt-8 sm:px-6">
         <MockDataBanner feed={feed} only={["compare"]} />
@@ -703,7 +747,7 @@ export default function ComparePage() {
         <div className="grid gap-x-12 gap-y-10 lg:grid-cols-2">
           <Section n={1} eyebrow="Raw speed" title="Pace">
             <ul>
-              {rows.pace.map((r) => (
+              {an.pace.map((r) => (
                 <DuelRow key={r.label} row={r} colA={colA} colB={colB} dense />
               ))}
             </ul>
@@ -711,7 +755,7 @@ export default function ComparePage() {
 
           <Section n={2} eyebrow="Strategy & racecraft" title="Race execution">
             <ul>
-              {rows.execution.map((r) => (
+              {an.execution.map((r) => (
                 <DuelRow key={r.label} row={r} colA={colA} colB={colB} dense />
               ))}
             </ul>
@@ -842,6 +886,6 @@ export default function ComparePage() {
           </Section>
         </div>
       </div>
-    </main>
+    </>
   );
-}
+});
