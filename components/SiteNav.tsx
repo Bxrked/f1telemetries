@@ -53,7 +53,7 @@ export default function SiteNav() {
           {/* The mark carries "F1"; the wordmark beside it completes the name.
               Vector, and the same shape the homepage intro flies through. */}
           <F1Mark className="h-5 w-auto text-[#E80000] transition-transform duration-micro ease-out-expo group-hover:-translate-y-px sm:h-6" />
-          <span className="hidden font-display text-base font-bold uppercase tracking-wider text-carbon-100 md:block">
+          <span className="hidden font-display text-base font-bold uppercase tracking-wider text-carbon-100 xl:block">
             Telemetries
           </span>
         </Link>
@@ -71,7 +71,7 @@ export default function SiteNav() {
                   e.preventDefault();
                   play(href, label);
                 }}
-                className={`timing relative flex items-center gap-2 rounded-panel px-4 py-2 text-label font-bold uppercase tracking-wider
+                className={`timing relative flex items-center gap-2 whitespace-nowrap rounded-panel px-3 py-2 text-label font-bold uppercase tracking-wider xl:px-4
                   transition-colors duration-micro ease-out-expo
                   ${active ? "text-white" : "text-carbon-300 hover:bg-carbon-800 hover:text-carbon-100"}`}
               >
@@ -85,12 +85,13 @@ export default function SiteNav() {
                   />
                 )}
                 <Icon size={15} className="relative z-10" />
-                <span className="relative z-10 hidden sm:inline">{label}</span>
+                {/* Five tabs: names from lg up, icons below — they wrapped at 1280. */}
+                <span className="relative z-10 hidden lg:inline">{label}</span>
               </Link>
             </motion.div>
           );
         })}
-        <span className="ml-auto hidden items-center gap-1.5 text-[11px] uppercase tracking-wider text-carbon-400 md:flex">
+        <span className="ml-auto hidden items-center gap-1.5 whitespace-nowrap text-[11px] uppercase tracking-wider text-carbon-400 min-[1400px]:flex">
           <Activity size={14} className="text-sector-green" /> Season data · auto-updating
         </span>
       </div>

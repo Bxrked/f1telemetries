@@ -565,7 +565,7 @@ async function jolpicaSeasonAll(path, key) {
 }
 
 const TEAM_DISPLAY = { rb: "Racing Bulls" };
-const BATTLES_KEY = "f1teammates:v2";
+const BATTLES_KEY = "f1teammates:v3";
 let battlesMemo = null;
 
 /**
@@ -595,8 +595,10 @@ export async function getTeammateBattles() {
       data.teams.forEach((t) => {
         t.color = teamColor(t.id);
         t.name = TEAM_DISPLAY[t.id] ?? t.name.replace(/ F1 Team$/, "");
-        t.a.headshot = seasonPortraitUrl(data.season, t.id, t.a);
-        t.b.headshot = seasonPortraitUrl(data.season, t.id, t.b);
+        for (const d of [t.a, t.b]) {
+          d.portrait = seasonPortraitUrl(data.season, t.id, d);
+          d.flag = FLAG_CODES[d.nationality] ? `/flags/${FLAG_CODES[d.nationality]}.svg` : null;
+        }
       });
       battlesMemo = { expires: Date.now() + TTL.results, data };
       try {
@@ -621,13 +623,18 @@ function mockTeammates() {
       number: String(d.id), position: String(d.finish), positionText: String(d.finish), points: String(d.points),
       Driver: { driverId: d.code.toLowerCase(), code: d.code, givenName, familyName: rest.join(" ") },
       Constructor: { constructorId: d.team, name: TEAMS[d.team].name },
-      FastestLap: { Time: { time: `1:${(13 + d.finish * 0.11).toFixed(3)}` } },
     };
   };
   const race = { season: String(SESSION.season), round: String(SESSION.round), raceName: SESSION.meetingName };
   const data = buildTeammateBattles({
     results: [{ ...race, Results: DRIVERS.map(row) }],
-    qualifying: [{ ...race, QualifyingResults: DRIVERS.map((d) => ({ ...row(d), position: String(d.grid) })) }],
+    qualifying: [{
+      ...race,
+      QualifyingResults: DRIVERS.map((d) => ({
+        ...row(d), position: String(d.grid), Q1: "1:12.000",
+        ...(d.grid <= 10 ? { Q2: "1:11.500" } : {}), ...(d.grid <= 6 ? { Q3: "1:11.000" } : {}),
+      })),
+    }],
     sprints: [],
   });
   data.teams.forEach((t) => (t.color = TEAMS[t.id].color));
@@ -639,62 +646,27 @@ function mockTeammates() {
    team = its site slug, driver = first 3 letters of given + family name
    + "01" (accents stripped: Hülkenberg → nichul01). Checked 22/22 for the
    2026 grid; a wrong guess is a plain 404, which the page turns into the
-   next source. The transform crops the full-body cutout to head and
-   shoulders, 256 px square (~15 kB). */
+   helmet instead. The image is a full-body transparent cutout; the
+   transform crops it from the top to the waist, 560×760 (~40 kB). */
 const F1_MEDIA_TEAM = { red_bull: "redbullracing", rb: "racingbulls", haas: "haasf1team", aston_martin: "astonmartin" };
 const lettersOnly = (s) => (s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^A-Za-z]/g, "");
 function seasonPortraitUrl(season, constructorId, driver) {
   const id = (lettersOnly(driver.given).slice(0, 3) + lettersOnly(driver.family).slice(0, 3)).toLowerCase();
   const team = F1_MEDIA_TEAM[constructorId] ?? lettersOnly(constructorId).toLowerCase();
   if (id.length < 6 || !team || !season) return null;
-  return `https://media.formula1.com/image/upload/c_fill,g_north,w_256,h_256/q_auto/common/f1/${season}/${team}/${id}01/${season}${team}${id}01right.webp`;
+  return `https://media.formula1.com/image/upload/c_fill,g_north,w_560,h_760/q_auto/common/f1/${season}/${team}/${id}01/${season}${team}${id}01right.webp`;
 }
 
-/* Second source: OpenF1 gives each driver a photo URL on formula1.com.
-   Only these hosts are ever put in an <img> (and allowed by the CSP). */
-const HEADSHOT_HOSTS = new Set(["media.formula1.com", "www.formula1.com"]);
-const HEADSHOT_KEY = "f1heads:v1";
-const isHeadshotUrl = (u) => {
-  try {
-    const url = new URL(u);
-    return url.protocol === "https:" && HEADSHOT_HOSTS.has(url.host);
-  } catch {
-    return false;
-  }
+/* Driver nationality (Jolpica's demonym) → flag file in public/flags
+   (flag-icons, MIT). Curated like the other tables here: an unmapped
+   nationality simply shows no flag. */
+const FLAG_CODES = {
+  British: "gb", Italian: "it", Monegasque: "mc", Dutch: "nl", Australian: "au", Spanish: "es",
+  French: "fr", German: "de", Thai: "th", Canadian: "ca", Finnish: "fi", Mexican: "mx",
+  Brazilian: "br", Argentine: "ar", Argentinian: "ar", "New Zealander": "nz", Japanese: "jp",
+  American: "us", Swedish: "se", Danish: "dk", Chinese: "cn", Swiss: "ch", Belgian: "be",
+  Austrian: "at", Polish: "pl",
 };
-
-/**
- * Driver code → headshot URL. Decoration only, so it never throws and
- * never touches feed status: OpenF1 shuts free access while an F1 session
- * is live, and a driver who left mid-season isn't in the latest race. The
- * map is therefore remembered in localStorage and only ever added to —
- * whoever has no photo gets the drawn helmet instead.
- */
-export async function getDriverHeadshots() {
-  let known = {};
-  try {
-    known = JSON.parse(window.localStorage.getItem(HEADSHOT_KEY) ?? "{}") ?? {};
-  } catch {
-    /* no storage — start empty */
-  }
-  for (const k of Object.keys(known)) if (!isHeadshotUrl(known[k])) delete known[k];
-  try {
-    const race = await jolpicaLatestRaceResults();
-    const { sessionKey } = await resolveOpenF1Session(race);
-    const rows = await fetchJson(`${OPENF1_BASE}/drivers?session_key=${sessionKey}`, { ttl: TTL.results });
-    for (const d of Array.isArray(rows) ? rows : []) {
-      if (d.name_acronym && isHeadshotUrl(d.headshot_url)) known[d.name_acronym] = d.headshot_url;
-    }
-    try {
-      window.localStorage.setItem(HEADSHOT_KEY, JSON.stringify(known));
-    } catch {
-      /* fine */
-    }
-  } catch (err) {
-    console.warn(`[f1Service] headshots unavailable, using what's remembered (${err?.message})`);
-  }
-  return known;
-}
 
 /** Session info: latest race identity + circuit facts + live weather. */
 export async function getSessionInfo() {

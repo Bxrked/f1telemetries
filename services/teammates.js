@@ -9,19 +9,13 @@
  *    together (a mid-season swap leaves the others listed, not compared).
  *  - Race result counts only races where BOTH were classified — a win
  *    over a retired teammate says nothing about pace.
- *  - Qualifying and fastest lap count only where both set one.
+ *  - Qualifying counts only sessions both took part in — the head-to-head
+ *    and the Q2 / Q3 appearances alike, so a driver who missed a weekend
+ *    isn't behind on a count they never had the chance to add to.
  *  - Sprints add to points, never to the race tally.
- *  - Points and best result are each driver's own, with this team.
+ *  - Points are each driver's own, with this team.
  * ------------------------------------------------------------------
  */
-
-/** "1:22.670" / "58.123" → seconds (null if unreadable). */
-export function lapSeconds(str) {
-  if (!str) return null;
-  const parts = String(str).split(":").map(Number);
-  if (parts.some((n) => !Number.isFinite(n))) return null;
-  return parts.reduce((acc, n) => acc * 60 + n, 0);
-}
 
 /** Jolpica pages split a race across page boundaries — stitch by round. */
 export function mergeRaces(pages, key) {
@@ -38,11 +32,11 @@ const classified = (row) => /^\d+$/.test(row?.positionText ?? "");
 const codeOf = (d) => d.code ?? d.familyName.slice(0, 3).toUpperCase();
 
 const ROWS = [
-  { key: "points", label: "Points" },
-  { key: "race", label: "Race result" },
   { key: "quali", label: "Qualifying" },
-  { key: "fastest", label: "Fastest lap" },
-  { key: "best", label: "Best result" },
+  { key: "race", label: "Race" },
+  { key: "q2", label: "Reached Q2" },
+  { key: "q3", label: "Reached Q3" },
+  { key: "points", label: "Points" },
 ];
 
 /**
@@ -67,9 +61,9 @@ export function buildTeammateBattles({ results, qualifying, sprints }) {
         name: `${row.Driver.givenName} ${row.Driver.familyName}`,
         given: row.Driver.givenName,
         family: row.Driver.familyName,
+        nationality: row.Driver.nationality || null,
         number: +(row.number ?? row.Driver.permanentNumber) || null,
         points: 0,
-        best: null,
         races: 0,
       };
       t.drivers.set(id, d);
@@ -88,11 +82,7 @@ export function buildTeammateBattles({ results, qualifying, sprints }) {
       const d = driver(t, row);
       d.points += +row.points || 0;
       d.races += 1;
-      if (classified(row)) d.best = d.best == null ? +row.position : Math.min(d.best, +row.position);
-      round(t, race.round).race.set(d.id, {
-        pos: classified(row) ? +row.position : null,
-        lap: lapSeconds(row.FastestLap?.Time?.time),
-      });
+      round(t, race.round).race.set(d.id, { pos: classified(row) ? +row.position : null });
     }
   }
   for (const race of sprints) {
@@ -101,7 +91,9 @@ export function buildTeammateBattles({ results, qualifying, sprints }) {
   for (const race of qualifying) {
     for (const row of race.QualifyingResults ?? []) {
       const t = team(row.Constructor);
-      round(t, race.round).quali.set(driver(t, row).id, +row.position);
+      /* Jolpica includes a Q2 / Q3 field only for drivers who were IN that
+         session (empty when they set no time) — presence is "reached". */
+      round(t, race.round).quali.set(driver(t, row).id, { pos: +row.position, q2: "Q2" in row, q3: "Q3" in row });
     }
   }
 
@@ -122,25 +114,28 @@ export function buildTeammateBattles({ results, qualifying, sprints }) {
     if (!top) continue; // never ran two cars in one race
     let [a, b] = top[0].split("|").map((id) => t.drivers.get(id));
 
-    const tally = { race: [0, 0], quali: [0, 0], fastest: [0, 0] };
+    const tally = { race: [0, 0], quali: [0, 0], q2: [0, 0], q3: [0, 0] };
     for (const x of t.rounds.values()) {
       const ra = x.race.get(a.id), rb = x.race.get(b.id);
-      if (ra && rb) {
-        if (ra.pos != null && rb.pos != null) tally.race[ra.pos < rb.pos ? 0 : 1]++;
-        if (ra.lap != null && rb.lap != null && ra.lap !== rb.lap) tally.fastest[ra.lap < rb.lap ? 0 : 1]++;
-      }
+      if (ra?.pos != null && rb?.pos != null) tally.race[ra.pos < rb.pos ? 0 : 1]++;
       const qa = x.quali.get(a.id), qb = x.quali.get(b.id);
-      if (qa != null && qb != null && qa !== qb) tally.quali[qa < qb ? 0 : 1]++;
+      if (qa && qb) {
+        if (qa.pos !== qb.pos) tally.quali[qa.pos < qb.pos ? 0 : 1]++;
+        [qa, qb].forEach((q, i) => {
+          if (q.q2) tally.q2[i]++;
+          if (q.q3) tally.q3[i]++;
+        });
+      }
     }
 
-    /* [a, b, winner] per row; lower is better only for best result. */
-    const lead = (x, y, lowerWins = false) => (x == null || y == null || x === y ? null : (lowerWins ? x < y : x > y) ? "a" : "b");
+    /* [a, b, winner] per row. */
+    const lead = (x, y) => (x === y ? null : x > y ? "a" : "b");
     const values = () => ({
-      points: [a.points, b.points, lead(a.points, b.points)],
-      race: [...tally.race, lead(...tally.race)],
       quali: [...tally.quali, lead(...tally.quali)],
-      fastest: [...tally.fastest, lead(...tally.fastest)],
-      best: [a.best, b.best, lead(a.best, b.best, true)],
+      race: [...tally.race, lead(...tally.race)],
+      q2: [...tally.q2, lead(...tally.q2)],
+      q3: [...tally.q3, lead(...tally.q3)],
+      points: [a.points, b.points, lead(a.points, b.points)],
     });
     let v = values();
     const wins = (side) => Object.values(v).filter((row) => row[2] === side).length;
@@ -156,8 +151,8 @@ export function buildTeammateBattles({ results, qualifying, sprints }) {
       name: t.name,
       together: top[1].n,
       points: [...t.drivers.values()].reduce((s, d) => s + d.points, 0),
-      a: { id: a.id, code: a.code, name: a.name, given: a.given, family: a.family, number: a.number },
-      b: { id: b.id, code: b.code, name: b.name, given: b.given, family: b.family, number: b.number },
+      a: { id: a.id, code: a.code, name: a.name, given: a.given, family: a.family, number: a.number, nationality: a.nationality },
+      b: { id: b.id, code: b.code, name: b.name, given: b.given, family: b.family, number: b.number, nationality: b.nationality },
       score: { a: wins("a"), b: wins("b") },
       rows: ROWS.map(({ key, label }) => ({ key, label, a: v[key][0], b: v[key][1], winner: v[key][2] })),
       others: [...t.drivers.values()]
