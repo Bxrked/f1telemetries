@@ -8,7 +8,6 @@ const FEED_LABELS: Record<string, string> = {
   session: "session info & weather",
   drivers: "results",
   positions: "position changes",
-  demographics: "driver demographics",
   sectors: "sector analysis",
   stints: "tyre strategy",
   pits: "pit stops",

@@ -108,11 +108,11 @@ export default function Replay3D({
     /* 1.5× rather than 2× on Retina: ~44 % fewer pixels to shade, and with
        MSAA on it still looks sharp. */
     renderer.setPixelRatio(Math.min(1.5, window.devicePixelRatio));
-    renderer.setClearColor(0x0b0d12);
+    renderer.setClearColor(0x000000);
     renderer.domElement.style.display = "block";
     el.appendChild(renderer.domElement);
     const scene = new THREE.Scene();
-    scene.fog = new THREE.Fog(0x0b0d12, span * 1.6, span * 4);
+    scene.fog = new THREE.Fog(0x000000, span * 1.6, span * 4);
     const camera = new THREE.PerspectiveCamera(42, 1, 0.1, span * 10);
     /* Overview distance that fits the circuit in the vertical field of
        view (with margin), looking down at ~50°. */
@@ -383,9 +383,9 @@ export default function Replay3D({
   return (
     <div className="absolute inset-0">
       <div ref={mountRef} className="absolute inset-0" role="img" aria-label={`${data.raceName} 3D replay`} />
-      {/* Camera presets, under the lap counter (lower thirds own the
+      {/* Camera presets, top-left of the map (the driver card owns the
           bottom-left, the radio card the bottom-right). */}
-      <div className="absolute left-4 top-[92px] flex rounded-row border border-carbon-700 bg-carbon-950/85 p-0.5 backdrop-blur-sm">
+      <div className="absolute left-3 top-3 flex rounded-row border border-carbon-700 bg-carbon-950/85 p-0.5 backdrop-blur-sm">
         {CAMS.map(({ id, label }) => (
           <button
             key={id}

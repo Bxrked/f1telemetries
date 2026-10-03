@@ -31,7 +31,8 @@ export default function Interviews({ data, interviews }: { data: any; interviews
     if (interviews?.status !== "ok") return [];
     const ours = Object.entries(data.drivers).map(([num, d]: [string, any]) => ({ num: +num, ...d }));
     return interviews.drivers.map((d: any, i: number) => {
-      const match = ours.find((o: any) => (o.name ?? "").trim().split(/\s+/).pop()?.toUpperCase() === d.lastName.toUpperCase());
+      const plain = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+      const match = ours.find((o: any) => plain((o.name ?? "").trim().split(/\s+/).pop() ?? "") === plain(d.lastName));
       return { ...d, i, code: match?.code ?? d.lastName.slice(0, 3).toUpperCase(), color: match?.teamColor ?? "#8B95A7" };
     });
   }, [data, interviews]);

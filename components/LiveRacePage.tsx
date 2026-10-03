@@ -8,7 +8,10 @@ import RaceReplay from "./RaceReplay";
  */
 export default function LiveRacePage() {
   return (
-    <main className="w-full min-w-0 px-4 py-6 sm:px-6">
+    /* A stage, like Teammates: from lg up it is exactly the space the nav
+       leaves (RaceReplay fills it and nothing scrolls); below lg the
+       pieces stack and the page scrolls. */
+    <main className="relative min-h-0 w-full min-w-0 flex-1 bg-black">
       <RaceReplay />
     </main>
   );

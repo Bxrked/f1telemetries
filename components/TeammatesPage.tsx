@@ -99,6 +99,7 @@ function Screen({ team, index, data, dir }: { team: any; index: number; data: an
       >
         <p className="eyebrow hidden lg:block">
           Season {data.season} · after round {data.afterRound}
+          {data.qualiRound > data.afterRound && ` · qualifying to round ${data.qualiRound}`}
         </p>
         <p className="timing mt-0 flex items-center gap-2 text-label font-bold text-carbon-100 lg:mt-3">
           <span className="text-carbon-500">[</span>#{pad(index + 1)}

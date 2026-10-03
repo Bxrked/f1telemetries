@@ -6,10 +6,6 @@
  * data if the fetch fails or USE_LIVE_DATA is off. The dashboard can
  * read getFeedStatus() to display which mode each feed resolved to.
  *
- * LIVE TODAY (step 1–2): schedule, standings, session info + weather,
- *   drivers, position changes, demographics.
- * STILL MOCK (step 3–4): sectors, stints, pit stops, degradation,
- *   performance — these need raw-lap computation, coming next.
  * ------------------------------------------------------------------
  */
 
@@ -136,7 +132,7 @@ const ageFrom = (dobIso) => {
   return age;
 };
 
-const mapResultRow = (r, fieldSize) => {
+const mapResultRow = (r, fieldSize, season) => {
   const grid = +r.grid === 0 ? fieldSize : +r.grid; // grid 0 = pit-lane start
   const finish = +r.position;
   const finished = r.status === "Finished" || /^\+\d+ Laps?$/.test(r.status);
@@ -154,6 +150,13 @@ const mapResultRow = (r, fieldSize) => {
     status: r.status,
     dnf: !finished,
     delta: grid - finish,
+    /* Redesign: who they are (portrait, flag) and how the race went. */
+    nationality: r.Driver.nationality || null,
+    flag: flagFor(r.Driver.nationality),
+    ...(season ? seasonPortraits(season, r.Constructor.constructorId, r.Driver) : {}),
+    raceTime: r.Time?.time ?? null, // winner: total; others: "+0.196"
+    fastestLap: r.FastestLap?.Time?.time ?? null,
+    fastestRank: r.FastestLap?.rank ? +r.FastestLap.rank : null,
   };
 };
 
@@ -435,40 +438,6 @@ const mockStandings = () => {
   return { afterRound: 8, drivers, constructors };
 };
 
-const demographicsFrom = (drivers) => {
-  const withAge = drivers.filter((d) => d.age != null);
-  const bins = [
-    { label: "20–24", min: 20, max: 24 },
-    { label: "25–29", min: 25, max: 29 },
-    { label: "30–34", min: 30, max: 34 },
-    { label: "35–39", min: 35, max: 39 },
-    { label: "40+", min: 40, max: 99 },
-  ];
-  const distribution = bins.map((b) => ({
-    bin: b.label,
-    count: withAge.filter((d) => d.age >= b.min && d.age <= b.max).length,
-  }));
-  const averageAge = +(withAge.reduce((s, d) => s + d.age, 0) / withAge.length).toFixed(1);
-  const byTeam = {};
-  withAge.forEach((d) => {
-    (byTeam[d.teamName] ??= { color: d.teamColor, ages: [] }).ages.push(d.age);
-  });
-  const teamAges = Object.entries(byTeam)
-    .map(([team, { color, ages }]) => ({
-      team,
-      color,
-      avgAge: +(ages.reduce((a, b) => a + b, 0) / ages.length).toFixed(1),
-    }))
-    .sort((a, b) => a.avgAge - b.avgAge);
-  return {
-    distribution,
-    averageAge,
-    teamAges,
-    youngest: Math.min(...withAge.map((d) => d.age)),
-    oldest: Math.max(...withAge.map((d) => d.age)),
-  };
-};
-
 /* ================================================================
  * PUBLIC API
  * ================================================================ */
@@ -527,6 +496,7 @@ export async function getStandings() {
         wins: +s.wins,
         teamName: s.Constructors?.[0]?.name ?? "—",
         teamColor: teamColor(s.Constructors?.[0]?.constructorId),
+        thumb: s.Constructors?.[0] ? seasonPortraits(dj.MRData.StandingsTable.season, s.Constructors[0].constructorId, s.Driver).thumb : null,
         gap: leaderPts - +s.points,
       }));
       const cLeaderPts = +(cl?.ConstructorStandings?.[0]?.points ?? 0);
@@ -565,7 +535,7 @@ async function jolpicaSeasonAll(path, key) {
 }
 
 const TEAM_DISPLAY = { rb: "Racing Bulls" };
-const BATTLES_KEY = "f1teammates:v3";
+const BATTLES_KEY = "f1teammates:v4";
 let battlesMemo = null;
 
 /**
@@ -580,9 +550,12 @@ export async function getTeammateBattles() {
       if (battlesMemo && battlesMemo.expires > Date.now()) return battlesMemo.data;
       try {
         const saved = JSON.parse(window.localStorage.getItem(BATTLES_KEY) ?? "null");
-        if (saved?.expires > Date.now() && saved.data?.teams?.length) return (battlesMemo = saved).data;
+        if (saved?.expires > Date.now() && saved.data?.teams?.length) {
+          battlesMemo = { expires: saved.expires, data: dressBattles(saved.data) };
+          return battlesMemo.data;
+        }
       } catch {
-        /* no storage (server, private mode) — just fetch */
+        /* no storage (server, private mode) or an unreadable entry — just fetch */
       }
       const [results, qualifying, sprints] = await Promise.all([
         jolpicaSeasonAll("results", "Results"),
@@ -592,14 +565,7 @@ export async function getTeammateBattles() {
       if (!results.length) throw new Error("no race results this season yet");
       const data = buildTeammateBattles({ results, qualifying, sprints });
       if (!data.teams.length) throw new Error("no teammate pairs found");
-      data.teams.forEach((t) => {
-        t.color = teamColor(t.id);
-        t.name = TEAM_DISPLAY[t.id] ?? t.name.replace(/ F1 Team$/, "");
-        for (const d of [t.a, t.b]) {
-          d.portrait = seasonPortraitUrl(data.season, t.id, d);
-          d.flag = FLAG_CODES[d.nationality] ? `/flags/${FLAG_CODES[d.nationality]}.svg` : null;
-        }
-      });
+      dressBattles(data);
       battlesMemo = { expires: Date.now() + TTL.results, data };
       try {
         window.localStorage.setItem(BATTLES_KEY, JSON.stringify(battlesMemo));
@@ -613,6 +579,24 @@ export async function getTeammateBattles() {
       return mockTeammates();
     }
   );
+}
+
+/**
+ * Team colour, display name, portraits and flags for a battles table.
+ * Run on fresh data AND on a cached copy: image addresses and colours are
+ * always derived here from ids and names, never taken from what
+ * localStorage happens to hold.
+ */
+function dressBattles(data) {
+  data.teams.forEach((t) => {
+    t.color = teamColor(t.id);
+    t.name = Object.hasOwn(TEAM_DISPLAY, t.id) ? TEAM_DISPLAY[t.id] : String(t.name).replace(/ F1 Team$/, "");
+    for (const d of [t.a, t.b]) {
+      d.portrait = seasonPortraitUrl(data.season, t.id, d);
+      d.flag = flagFor(d.nationality);
+    }
+  });
+  return data;
 }
 
 /** Demo table from the Monaco mock: one race, so every tally is 1–0. */
@@ -652,8 +636,10 @@ const F1_MEDIA_TEAM = { red_bull: "redbullracing", rb: "racingbulls", haas: "haa
 const lettersOnly = (s) => (s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^A-Za-z]/g, "");
 function seasonPortraitUrl(season, constructorId, driver, transform = "c_fill,g_north,w_560,h_760") {
   const id = (lettersOnly(driver.given).slice(0, 3) + lettersOnly(driver.family).slice(0, 3)).toLowerCase();
-  const team = F1_MEDIA_TEAM[constructorId] ?? lettersOnly(constructorId).toLowerCase();
-  if (id.length < 6 || !team || !season) return null;
+  const team = Object.hasOwn(F1_MEDIA_TEAM, constructorId) ? F1_MEDIA_TEAM[constructorId] : lettersOnly(constructorId).toLowerCase();
+  /* Everything interpolated into the path is letters or a 4-digit year —
+     nothing an upstream response says can steer the URL anywhere else. */
+  if (id.length < 6 || !team || !/^\d{4}$/.test(String(season))) return null;
   return `https://media.formula1.com/image/upload/${transform}/q_auto/common/f1/${season}/${team}/${id}01/${season}${team}${id}01right.webp`;
 }
 /** Waist-up cutout + a 96 px face thumbnail (~3 kB) from a Jolpica Driver object. */
@@ -661,7 +647,7 @@ function seasonPortraits(season, constructorId, Driver) {
   const d = { given: Driver.givenName, family: Driver.familyName };
   return {
     portrait: seasonPortraitUrl(season, constructorId, d),
-    thumb: seasonPortraitUrl(season, constructorId, d, "c_fill,g_north,w_96,h_96"),
+    thumb: seasonPortraitUrl(season, constructorId, d, "c_thumb,g_face,w_96,h_96,z_0.9"),
   };
 }
 
@@ -675,6 +661,11 @@ const FLAG_CODES = {
   American: "us", Swedish: "se", Danish: "dk", Chinese: "cn", Swiss: "ch", Belgian: "be",
   Austrian: "at", Polish: "pl",
 };
+/** Flag path for a nationality, or null. Own keys only: the string comes
+    from an API, and "constructor" must not find Object.prototype. */
+function flagFor(nationality) {
+  return typeof nationality === "string" && Object.hasOwn(FLAG_CODES, nationality) ? `/flags/${FLAG_CODES[nationality]}.svg` : null;
+}
 
 /** Session info: latest race identity + circuit facts + live weather. */
 export async function getSessionInfo() {
@@ -719,7 +710,7 @@ export async function getDrivers() {
     "drivers",
     async () => {
       const race = await jolpicaLatestRaceResults();
-      return race.Results.map((r) => mapResultRow(r, race.Results.length));
+      return race.Results.map((r) => mapResultRow(r, race.Results.length, race.season));
     },
     async () => {
       await simulateLatency();
@@ -733,18 +724,13 @@ export async function getPositionChanges() {
   const drivers = await getDrivers();
   feedStatus.positions = feedStatus.drivers;
   return drivers
-    .map(({ code, name, teamColor, grid, finish, delta, dnf, status }) => ({
-      code, name, teamColor, grid, finish, delta, dnf, status,
+    .map(({ code, name, teamName, teamColor, grid, finish, delta, dnf, status, id, nationality, flag, portrait, thumb, raceTime, fastestLap, fastestRank }) => ({
+      code, name, teamName, teamColor, grid, finish, delta, dnf, status,
+      number: id, nationality, flag, portrait, thumb, raceTime, fastestLap, fastestRank,
     }))
     .sort((a, b) => b.delta - a.delta);
 }
 
-/** Field demographics — computed from whichever driver set resolved. */
-export async function getDemographics() {
-  const drivers = await getDrivers();
-  feedStatus.demographics = feedStatus.drivers;
-  return demographicsFrom(drivers);
-}
 
 
 /* ================================================================
@@ -1428,6 +1414,21 @@ export async function getReplayTimeline() {
       const reference = buildReference(trace.samples, trace.lap);
       const driverLaps = buildDriverLaps(laps);
 
+      /* Who they are, for the start grid, driver card and podium: Jolpica's
+         spelling of the name (OpenF1 capitalises the surname), flag and
+         season portraits. Keyed by car number, which both APIs share. */
+      race.Results.forEach((r) => {
+        const d = drivers[+r.number];
+        if (!d) return;
+        Object.assign(d, {
+          name: `${r.Driver.givenName} ${r.Driver.familyName}`,
+          number: +r.number,
+          nationality: r.Driver.nationality || null,
+          flag: flagFor(r.Driver.nationality),
+          ...seasonPortraits(race.season, r.Constructor.constructorId, r.Driver),
+        });
+      });
+
       /* Classification from Jolpica: who took the flag, and why the rest
          didn't. Keyed by car number, which both APIs share. */
       const results = {};
@@ -1545,6 +1546,9 @@ export async function getReplayTimeline() {
       return {
         sessionKey,
         raceName: race.raceName,
+        season: +race.season,
+        round: +race.round,
+        circuitName: race.Circuit?.circuitName ?? null,
         drivers,
         results,
         timeline,
@@ -1747,7 +1751,7 @@ export async function getDriverComparison() {
             teamColor: id.teamColor ?? "#8B95A7",
             number: num,
             nationality: res?.Driver?.nationality || null,
-            flag: FLAG_CODES[res?.Driver?.nationality] ? `/flags/${FLAG_CODES[res.Driver.nationality]}.svg` : null,
+            flag: flagFor(res?.Driver?.nationality),
             ...(res ? seasonPortraits(race.season, res.Constructor.constructorId, res.Driver) : {}),
             grid: res ? (+res.grid === 0 ? finishOrder.length : +res.grid) : null,
             finish: res ? +res.position : null,

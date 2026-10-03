@@ -28,7 +28,7 @@ const [results, qualifying, sprints] = [
   await all("sprint", "SprintResults"),
 ];
 const out = buildTeammateBattles({ results, qualifying, sprints });
-console.log(`${out.season} after round ${out.afterRound} (${out.raceName}) — ${results.length} races, ${sprints.length} sprints\n`);
+console.log(`${out.season} after round ${out.afterRound} (${out.raceName}), qualifying to round ${out.qualiRound} — ${results.length} races, ${sprints.length} sprints\n`);
 for (const t of out.teams) {
   console.log(`${t.name}  ·  ${t.a.code} ${t.score.a}–${t.score.b} ${t.b.code}  ·  ${t.together} races together`);
   for (const r of t.rows) {

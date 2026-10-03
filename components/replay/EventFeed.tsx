@@ -87,7 +87,7 @@ export default function EventFeed({
       </div>
       <ol
         ref={listRef}
-        className="relative min-h-0 flex-1 overflow-y-auto"
+        className="relative min-h-0 flex-1 overflow-y-auto [scrollbar-color:#232A37_transparent] [scrollbar-width:thin]"
         onScroll={(e) => {
           /* Follow only while the current row is in view. */
           const list = e.currentTarget;

@@ -41,7 +41,11 @@ const ROWS = [
 
 /**
  * @param {{ results: any[], qualifying: any[], sprints: any[] }} season  merged Jolpica races
- * @returns {{ season: number, afterRound: number, teams: any[] }}
+ * @returns {{ season: number, afterRound: number, qualiRound: number, teams: any[] }}
+ *   `qualiRound` is the last round with a qualifying result. On a race
+ *   weekend it runs one ahead of `afterRound` (qualifying is on Saturday),
+ *   so the qualifying tallies can cover one more session than there are
+ *   races — the page says so rather than let 9–7 sit beside "15 races".
  */
 export function buildTeammateBattles({ results, qualifying, sprints }) {
   /* constructorId → { name, drivers: Map(driverId → tally), rounds: Map(round → rows) } */
@@ -163,5 +167,12 @@ export function buildTeammateBattles({ results, qualifying, sprints }) {
   out.sort((x, y) => y.points - x.points);
 
   const last = results[results.length - 1];
-  return { season: +(last?.season ?? 0), afterRound: +(last?.round ?? 0), raceName: last?.raceName ?? null, teams: out };
+  const lastQuali = qualifying[qualifying.length - 1];
+  return {
+    season: +(last?.season ?? 0),
+    afterRound: +(last?.round ?? 0),
+    qualiRound: +(lastQuali?.round ?? last?.round ?? 0),
+    raceName: last?.raceName ?? null,
+    teams: out,
+  };
 }

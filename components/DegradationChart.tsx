@@ -1,11 +1,8 @@
 "use client";
 
-import {
-  LineChart, Line, BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer, Legend,
-} from "recharts";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import ChartTooltip from "./ChartTooltip";
-import { GRID, TICK, TICK_CATEGORY, AXIS_LINE, CURSOR, BAR } from "@/lib/chartTheme";
+import { GRID, TICK, AXIS_LINE } from "@/lib/chartTheme";
 import { formatLapTime } from "@/services/format";
 
 const COMPOUND_HEX: Record<string, string> = {
@@ -63,43 +60,29 @@ export default function DegradationChart({ data }: { data: any }) {
         </ResponsiveContainer>
       </div>
 
-      {/* Degradation slope (s / lap) */}
+      {/* Degradation slope (s / lap) — a figure per compound, in the same
+          row style as the rest of the page. Usually negative: the car gets
+          lighter faster than the tyre gets slower. */}
       <div>
-        <p className="eyebrow mb-1">Deg slope · s/lap</p>
-        <div className="h-48">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={slopes} margin={{ top: 4, right: 4, left: -22, bottom: 0 }}>
-              <CartesianGrid {...GRID} vertical={false} />
-              <XAxis
-                dataKey="compound"
-                tick={TICK_CATEGORY}
-                axisLine={AXIS_LINE} tickLine={false}
-                tickFormatter={(v) => v.slice(0, 3)}
-              />
-              <YAxis
-                tick={TICK}
-                axisLine={false} tickLine={false}
-              />
-              <Tooltip
-                cursor={CURSOR}
-                content={
-                  <ChartTooltip
-                    formatter={(e: any) => ({
-                      label: e.payload.compound.toLowerCase(),
-                      value: `${e.value.toFixed(3)} s/lap`,
-                      color: compoundColor(e.payload.compound),
-                    })}
-                  />
-                }
-              />
-              <Bar dataKey="slope" radius={[3, 3, 0, 0]} maxBarSize={26}>
-                {slopes.map((s: any) => (
-                  <Cell key={s.compound} fill={compoundColor(s.compound)} fillOpacity={0.9} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
+        <p className="eyebrow mb-2 border-b border-carbon-800 pb-1.5">Change per lap</p>
+        <ul>
+          {slopes.map((s: any) => (
+            <li key={s.compound} className="flex items-center justify-between gap-3 py-[5px]">
+              <span className="timing flex items-center gap-2 text-micro font-bold uppercase tracking-wider text-carbon-200">
+                <span className="h-3 w-[3px]" style={{ background: compoundColor(s.compound) }} />
+                {s.compound.toLowerCase()}
+              </span>
+              <span className="timing text-label font-bold text-carbon-100">
+                {s.slope > 0 ? "+" : "−"}
+                {Math.abs(s.slope).toFixed(3)}
+                <span className="ml-1 text-micro font-medium text-carbon-500">s/lap</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+        <p className="mt-2 text-micro leading-relaxed text-carbon-500">
+          Minus means laps got quicker as the stint went on: burning fuel gains more than the tyre loses.
+        </p>
       </div>
     </div>
   );

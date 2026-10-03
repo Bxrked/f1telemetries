@@ -158,7 +158,7 @@ export default function TrackMap({ circuitName, outline }: { circuitName?: strin
             strokeLinecap="round"
             strokeLinejoin="round"
             filter="url(#trackGlow)"
-            initial={forceVisible ? false : { pathLength: 0 }}
+            initial={forceVisible ? false : { pathLength: 0, opacity: 0.92, strokeWidth: 4.5 }}
             animate={{
               pathLength: 1,
               opacity: sector && sector !== key ? 0.12 : 0.92,

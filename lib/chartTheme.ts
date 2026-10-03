@@ -12,8 +12,10 @@
  *    gridlines are a reading aid, not decoration.
  *  - Ticks are mono and small. Numbers on axes are read positionally, so
  *    they need to align, not shout.
- *  - Bars are near-square. Generously rounded bars are a consumer-SaaS
- *    tell; instruments have hard edges.
+ *
+ * Only the two line charts (position chart, degradation) and the
+ * Head-to-Head gap chart still use Recharts; every ranked comparison is
+ * drawn as plain rows (see TelemetryExhibits).
  */
 
 /** Faint dashed grid — reading aid only. */
@@ -29,31 +31,7 @@ export const TICK = {
   fontFamily: "var(--font-timing)",
 } as const;
 
-/** Category axis ticks (driver codes, compounds) — brighter, bolder. */
-export const TICK_CATEGORY = {
-  fill: "#8B95A7",
-  fontSize: 9.5,
-  fontFamily: "var(--font-timing)",
-  fontWeight: 700,
-} as const;
-
 export const AXIS_LINE = { stroke: "#1E2430" } as const;
-
-/** Hover cursor wash — just enough to locate the row. */
-export const CURSOR = { fill: "rgba(255,255,255,0.025)" } as const;
-
-/** Bar geometry. Near-square corners, thin bars, high density. */
-export const BAR = {
-  radiusH: [0, 2, 2, 0] as [number, number, number, number],
-  radiusV: [2, 2, 0, 0] as [number, number, number, number],
-  maxSize: 11,
-};
-
-/** Neutral series colour for data with no team or status meaning. */
-export const NEUTRAL = "#5B6678";
-
-/** FIA timing-screen sector colours, reused by charts. */
-export const SECTOR = { s1: "#E10600", s2: "#3B9BFF", s3: "#FFD644" } as const;
 
 /** Tyre compound colours, matching the Tailwind tyre-* tokens. */
 export const COMPOUND: Record<string, string> = {

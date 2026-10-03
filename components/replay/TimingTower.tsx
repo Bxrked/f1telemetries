@@ -4,6 +4,7 @@ import { useState } from "react";
 import { LayoutGroup, motion } from "framer-motion";
 import { SPRING } from "@/lib/motion";
 import { COMPOUND } from "@/lib/chartTheme";
+import { Face } from "../TelemetryExhibits";
 
 const SHORT: Record<string, string> = { SOFT: "S", MEDIUM: "M", HARD: "H", INTER: "I", WET: "W" };
 
@@ -53,7 +54,7 @@ export default function TimingTower({
       <div className="mb-1.5 flex items-center justify-between px-1">
         <p className="eyebrow">Lap {lap}</p>
         {/* Two-way toggle with a sliding pill, same as standings tabs. */}
-        <div className="flex rounded-row border border-carbon-700 bg-carbon-900 p-0.5">
+        <div className="flex rounded-row border border-carbon-700 p-0.5">
           {(["interval", "gap"] as const).map((m) => (
             <button
               key={m}
@@ -73,7 +74,7 @@ export default function TimingTower({
       </div>
 
       <LayoutGroup>
-        <ol className="min-h-0 flex-1 overflow-y-auto pr-0.5">
+        <ol className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pr-1 [scrollbar-color:#232A37_transparent] [scrollbar-width:thin]">
           {cars.map((c, i) => {
             const id = data.drivers[c.num] ?? {};
             const g = gapOf[c.num];
@@ -96,9 +97,9 @@ export default function TimingTower({
                 layout="position"
                 transition={SPRING.panel}
                 style={{ ["--team" as any]: id.teamColor }}
-                className={`group relative flex h-7 cursor-pointer items-center gap-2 border-b border-carbon-800/80 pl-1 pr-1.5
+                className={`group relative flex h-7 cursor-pointer items-center gap-1.5 border-b border-carbon-800/60 pl-1 pr-1.5
                   transition-colors duration-micro
-                  ${isFocus ? "bg-[color-mix(in_srgb,var(--team)_18%,transparent)]" : "hover:bg-carbon-800/60"}
+                  ${isFocus ? "bg-[color-mix(in_srgb,var(--team)_22%,transparent)]" : "hover:bg-carbon-800/50"}
                   ${out ? "opacity-45" : ""}`}
                 onClick={() => onFocus(isFocus ? null : c.num)}
                 aria-current={isFocus || undefined}
@@ -107,6 +108,7 @@ export default function TimingTower({
                   {out ? "–" : i + 1}
                 </span>
                 <span className="h-4 w-[3px] shrink-0" style={{ background: id.teamColor }} />
+                <Face src={id.thumb} color={id.teamColor ?? "#8B95A7"} size={20} />
                 <span className="timing w-9 shrink-0 text-label font-bold text-carbon-100">{id.code ?? c.num}</span>
                 {speaking === c.num && (
                   <span className="flex h-3 items-end gap-px" title="Team radio" aria-label="On team radio">
