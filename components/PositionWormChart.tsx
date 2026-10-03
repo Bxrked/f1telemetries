@@ -71,10 +71,8 @@ function WormTooltip({ active, payload, label, colorFor }: any) {
 export default function PositionWormChart({ data, messages }: { data: any; messages?: any[] }) {
   const { rows, legend, maxLap } = data;
   const [focus, setFocus] = useState<string | null>(null);
-  /* Hovering a chip previews that driver without committing to it; a
-     click pins the focus. Hover wins while it lasts. */
-  const [peek, setPeek] = useState<string | null>(null);
-  const lit = peek ?? focus;
+  /* A click selects a driver; pointing at a chip does nothing. */
+  const lit = focus;
   const forceVisible = useForceVisible();
   const scWindows = useMemo(() => neutralisations(messages ?? []), [messages]);
 
@@ -89,7 +87,7 @@ export default function PositionWormChart({ data, messages }: { data: any; messa
   return (
     <div>
       {/* Driver focus chips */}
-      <div className="mb-3 flex flex-wrap gap-1" onMouseLeave={() => setPeek(null)}>
+      <div className="mb-3 flex flex-wrap gap-1">
         <button
           onClick={() => setFocus(null)}
           className={`timing rounded-row border px-2 py-0.5 text-micro font-bold uppercase tracking-wider
@@ -102,9 +100,6 @@ export default function PositionWormChart({ data, messages }: { data: any; messa
           <button
             key={d.code}
             onClick={() => setFocus((f) => (f === d.code ? null : d.code))}
-            onMouseEnter={() => setPeek(d.code)}
-            onFocus={() => setPeek(d.code)}
-            onBlur={() => setPeek(null)}
             title={d.name}
             aria-pressed={focus === d.code}
             style={{ ["--team" as any]: d.teamColor }}

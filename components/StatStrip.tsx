@@ -99,7 +99,7 @@ export default function StatStrip({ session }: { session: any }) {
             className="group flex min-h-[40px] flex-1 flex-col justify-center py-1.5"
           >
             <div className="flex items-baseline justify-between gap-3">
-              <dt className="eyebrow transition-colors duration-micro group-hover:text-carbon-300">{r.label}</dt>
+              <dt className="eyebrow">{r.label}</dt>
               <dd className="timing text-lg font-bold leading-none text-carbon-100">
                 {r.value}
                 {r.unit && <span className="ml-1 text-label font-medium text-carbon-400">{r.unit}</span>}

@@ -24,7 +24,7 @@ import PodiumDriver from "./PodiumDriver";
 import TrackMap from "./TrackMap";
 import StatStrip from "./StatStrip";
 import DegradationChart from "./DegradationChart";
-import { DriverHover, Face, People, PitBoard, Reveal, SectorBoard, SpeedAndPace, StintBoard, hoverRow, useDriverHover } from "./TelemetryExhibits";
+import { Face, People, PitBoard, Reveal, SectorBoard, SpeedAndPace, StintBoard } from "./TelemetryExhibits";
 import ScheduleStrip from "./ScheduleStrip";
 import PositionWormChart from "./PositionWormChart";
 import RaceControlFeed from "./RaceControlFeed";
@@ -107,7 +107,12 @@ function Chapter({ n, id, title, lede, children }: { n: number; id: string; titl
             </span>
           ))}
         </h2>
-        <motion.span variants={ruleWipe} className="mt-3 block h-[3px] w-16 origin-left -skew-x-[20deg] bg-f1red" />
+        {/* The slant sits on a wrapper: the wipe animates scaleX, and a
+            transform written by the animation would replace a skew class
+            on the same element (the rule used to come out square). */}
+        <span className="mt-3 block w-16 -skew-x-[20deg]">
+          <motion.span variants={ruleWipe} className="block h-[3px] origin-left bg-f1red" />
+        </span>
         <motion.p variants={metaFade} className="mt-3 max-w-xl text-data leading-relaxed text-carbon-400">
           {lede}
         </motion.p>
@@ -271,7 +276,6 @@ function Podium({ session, feed, positions, pitStops }: { session: any; feed: an
 
 /** Grid → flag, one row per driver: face, code, the move, a centre-out bar. */
 function PositionMoves({ data }: { data: any[] }) {
-  const hover = useDriverHover();
   /* Finishers by places gained; retirements together at the foot. */
   const rows = [...data.filter((d) => !d.dnf), ...data.filter((d) => d.dnf)];
   const max = Math.max(1, ...rows.filter((d) => !d.dnf).map((d) => Math.abs(d.delta)));
@@ -285,7 +289,6 @@ function PositionMoves({ data }: { data: any[] }) {
         /* A retirement isn't a move: "P19 → DNF" with a +3 bar would lie. */
         const up = !d.dnf && d.delta > 0, down = !d.dnf && d.delta < 0;
         const w = `${(Math.abs(d.delta) / max) * 100}%`;
-        const { dim, ...handlers } = hoverRow(hover, d.code);
         return (
           <motion.li
             key={d.code}
@@ -295,8 +298,7 @@ function PositionMoves({ data }: { data: any[] }) {
               show: (k: number = 0) => ({ opacity: d.dnf ? 0.5 : 1, x: 0, transition: { duration: 0.3, ease: EASE.out, delay: rowDelay(k) } }),
             }}
             title={`${d.name} · P${d.grid} → P${d.finish}${d.dnf ? ` · ${d.status}` : ""}`}
-            {...handlers}
-            className={`grid grid-cols-[1.75rem_2.5rem_4.5rem_1fr_1fr_2rem] items-center gap-2 py-[3px] [&>*]:transition-opacity [&>*]:duration-150 ${dim}`}
+            className="grid grid-cols-[1.75rem_2.5rem_4.5rem_1fr_1fr_2rem] items-center gap-2 py-[3px]"
           >
             <Face src={d.thumb} color={d.teamColor} size={24} />
             <span className="timing text-label font-bold text-carbon-100">{d.code}</span>
@@ -401,7 +403,6 @@ function KeyMoments({ messages }: { messages: any[] }) {
 /** Both championships side by side, every row visible — no scroll box. */
 function StandingsBoard({ standings }: { standings: any }) {
   const forceVisible = useForceVisible();
-  const hover = useDriverHover();
   const table = (rows: any[], drivers: boolean) => {
     const max = rows[0]?.points || 1;
     return (
@@ -413,9 +414,7 @@ function StandingsBoard({ standings }: { standings: any }) {
             whileInView={{ opacity: 1, y: 0 }}
             viewport={VIEWPORT}
             transition={{ duration: 0.25, ease: EASE.out, delay: rowDelay(i) }}
-            {...(drivers ? { onMouseEnter: () => hover.set(r.code), onMouseLeave: () => hover.set(null) } : {})}
-            className={`grid grid-cols-[1.25rem_auto_minmax(0,1fr)_3rem_3rem] items-center gap-2.5 border-b border-carbon-800/70 py-[5px] [&>*]:transition-opacity [&>*]:duration-150
-              ${drivers && hover.code && hover.code !== r.code ? "[&>*]:opacity-25" : ""}`}
+            className="grid grid-cols-[1.25rem_auto_minmax(0,1fr)_3rem_3rem] items-center gap-2.5 border-b border-carbon-800/70 py-[5px]"
           >
             <span className={`timing text-right text-label font-bold ${i < 3 ? "text-carbon-100" : "text-carbon-500"}`}>{r.pos}</span>
             {drivers ? <Face src={r.thumb} color={r.teamColor} size={26} /> : <span className="h-4 w-[3px]" style={{ background: r.color }} />}
@@ -480,10 +479,12 @@ function Rail({ active }: { active: string | null }) {
             document.getElementById(c.id)?.scrollIntoView({ behavior: "smooth", block: "start" });
           }}
           aria-current={active === c.id || undefined}
-          className={`timing group flex items-center justify-end gap-2 py-[5px] text-micro font-bold uppercase tracking-wider transition-colors duration-micro
+          className={`timing flex items-center justify-end gap-2 py-[5px] text-micro font-bold uppercase tracking-wider transition-colors duration-micro
             ${active === c.id ? "text-carbon-100" : "text-carbon-500 hover:text-carbon-200"}`}
         >
-          <span className={active === c.id ? "" : "hidden group-hover:inline"}>{c.label}</span>
+          {/* Always named: a rail of bare numbers only made sense while the
+              name appeared on hover. */}
+          <span>{c.label}</span>
           {String(i + 1).padStart(2, "0")}
           {active === c.id ? (
             <motion.span layoutId="telemetry-rail" className="h-[3px] w-5 bg-f1red" transition={SPRING.panel} />
@@ -570,7 +571,6 @@ export default function TelemetryDashboard() {
       <Podium session={s} feed={feed} positions={d.positions} pitStops={d.pitStops} />
       <Rail active={active} />
 
-      <DriverHover>
       <div className="mx-auto w-full max-w-[1400px] space-y-20 px-4 pb-24 pt-10 sm:px-8 xl:pr-48">
         <MockDataBanner
           feed={feed}
@@ -657,7 +657,6 @@ export default function TelemetryDashboard() {
           <span>Sources: Jolpica (results, standings, schedule) · OpenF1 (telemetry, weather)</span>
         </footer>
       </div>
-      </DriverHover>
     </main>
   );
 }

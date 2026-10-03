@@ -474,6 +474,23 @@ export default function RaceReplay() {
             <span className="timing text-micro text-carbon-400">T+{clock(ui.t - tl.raceStart)}</span>
           </div>
 
+          {/* The moment: a notable event, in the site's own type. It owns
+              the free middle of the header line — a slot of its own, so it
+              can't run into the lap counter or the controls at any width
+              (and over the map it sat on the cars it described). */}
+          <div className="relative hidden h-14 min-w-0 flex-1 lg:block">
+            <AnimatePresence>
+              {lowerThird && (
+                <Moment
+                  key={lowerThird.key}
+                  event={lowerThird}
+                  color={lowerThird.nums?.length ? drv(lowerThird.nums[0]).teamColor : undefined}
+                  compact
+                />
+              )}
+            </AnimatePresence>
+          </div>
+
           <div className="ml-auto flex items-center gap-2">
             {/* Honest about what's drawn right now (2D only: 3D always places by timing). */}
             {view === "2d" && (
@@ -521,20 +538,6 @@ export default function RaceReplay() {
           </div>
         </header>
 
-        {/* ── The moment: a notable event, in the site's own type. In the
-               empty middle of the header line, above the map — over the
-               map it sat on top of the cars it was describing. ───────── */}
-        <AnimatePresence>
-          {lowerThird && (
-            <div
-              key={lowerThird.key}
-              className={`pointer-events-none absolute left-[248px] top-0 z-20 hidden h-14 lg:block ${rightOpen ? "right-[300px]" : "right-0"}`}
-            >
-              <Moment event={lowerThird} color={lowerThird.nums?.length ? drv(lowerThird.nums[0]).teamColor : undefined} compact />
-            </div>
-          )}
-        </AnimatePresence>
-
         {/* ── Timing tower ──────────────────────────────────────────── */}
         <section className="order-5 flex min-h-0 flex-col px-3 py-3 max-lg:h-[440px] max-lg:border-t max-lg:border-carbon-800 lg:absolute lg:bottom-0 lg:left-0 lg:top-14 lg:z-10 lg:w-[248px] lg:py-1 lg:pl-4 lg:pr-2">
           <TimingTower data={data} cars={cars} gaps={gaps} lap={lap} t={ui.t} focus={focus} onFocus={setFocus} speaking={radio.current?.num ?? null} />
@@ -565,7 +568,10 @@ export default function RaceReplay() {
             {status && (
               <motion.div
                 key={status.type + status.from}
-                className="pointer-events-none absolute left-1/2 top-3 -translate-x-1/2"
+                /* Centred with auto margins, not -translate-x-1/2: the y
+                   animation writes `transform` and wiped the translate,
+                   leaving the banner hanging off the centre line. */
+                className="pointer-events-none absolute inset-x-0 top-3 mx-auto w-max"
                 initial={{ y: -40, opacity: 0 }}
                 animate={{ y: 0, opacity: 1 }}
                 exit={{ y: -40, opacity: 0, transition: { duration: 0.25, ease: EASE.in } }}

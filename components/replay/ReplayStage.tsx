@@ -272,30 +272,36 @@ export function Moment({ event, color, compact = false }: { event: any; color?: 
   const c = color ?? EVENT_COLOR[event.type] ?? "#E7EAF0";
   return (
     <motion.div
-      className={`pointer-events-none absolute left-1/2 z-10 w-max max-w-[92%] -translate-x-1/2 text-center [text-shadow:0_2px_14px_#000] ${compact ? "top-1.5" : "top-3"}`}
+      /* Centred with auto margins. A -translate-x-1/2 class is wiped by
+         the y animation (it writes `transform`), which left the moment
+         starting at the centre line and running off to the right. */
+      className={`pointer-events-none absolute inset-x-0 z-10 mx-auto w-max text-center [text-shadow:0_2px_14px_#000] ${compact ? "top-1.5 max-w-full" : "top-3 max-w-[92%]"}`}
       initial={{ opacity: 0, y: -14 }}
       animate={{ opacity: 1, y: 0, transition: { duration: 0.45, ease: EASE.out } }}
       exit={{ opacity: 0, y: -10, transition: { duration: 0.25, ease: EASE.in } }}
     >
-      <p className="eyebrow" style={{ color: c }}>
+      <p className="eyebrow truncate" style={{ color: c }}>
         Lap {event.lap} · {MOMENT_LABEL[event.type] ?? event.type}
       </p>
       {/* The line rises out of a mask, like the page headlines. */}
       <p className="overflow-hidden pb-0.5 pr-[0.12em]">
         <motion.span
-          className={`block font-display font-black uppercase italic leading-none tracking-tight text-carbon-100 ${compact ? "text-2xl" : "text-2xl sm:text-3xl"}`}
+          className={`block truncate font-display font-black uppercase italic leading-none tracking-tight text-carbon-100 ${compact ? "text-xl xl:text-2xl" : "text-2xl sm:text-3xl"}`}
           initial={{ y: "105%" }}
           animate={{ y: "0%", transition: { duration: 0.55, ease: EASE.out, delay: 0.05 } }}
         >
           {event.label}
         </motion.span>
       </p>
-      <motion.span
-        className={`mx-auto block h-[3px] w-14 origin-center -skew-x-[20deg] ${compact ? "mt-1" : "mt-1.5"}`}
-        style={{ background: c }}
-        initial={{ scaleX: 0 }}
-        animate={{ scaleX: 1, transition: { duration: 0.5, ease: EASE.out, delay: 0.2 } }}
-      />
+      {/* The slant sits on a wrapper: scaleX on the same element would replace it. */}
+      <span className={`mx-auto block w-14 -skew-x-[20deg] ${compact ? "mt-1" : "mt-1.5"}`}>
+        <motion.span
+          className="block h-[3px] origin-center"
+          style={{ background: c }}
+          initial={{ scaleX: 0 }}
+          animate={{ scaleX: 1, transition: { duration: 0.5, ease: EASE.out, delay: 0.2 } }}
+        />
+      </span>
     </motion.div>
   );
 }

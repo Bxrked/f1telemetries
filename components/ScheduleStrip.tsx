@@ -134,7 +134,7 @@ export default function ScheduleStrip({ schedule }: { schedule: any }) {
               title={`${r.gp} · ${r.circuit}`}
               className={`group relative min-w-[96px] shrink-0 overflow-hidden rounded-row border px-2.5 pb-2 pt-2.5
                 transition-colors duration-micro ease-out-expo
-                ${isLatest ? "border-f1red/60 bg-f1red/[0.07]" : isNext ? "border-sector-green/50 bg-sector-green/[0.05]" : "border-carbon-700 bg-carbon-900/50 hover:border-carbon-600 hover:bg-carbon-800/60"}`}
+                ${isLatest ? "border-f1red/60 bg-f1red/[0.07]" : isNext ? "border-sector-green/50 bg-sector-green/[0.05]" : "border-carbon-700 bg-carbon-900/50"}`}
             >
               {/* Status rule along the top edge */}
               <span

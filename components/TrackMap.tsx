@@ -40,17 +40,15 @@ const MONACO_CORNERS = [
    straight line across the circuit where data is missing. */
 const toPath = (pts: number[][]) => (pts.length ? tracePath(pts) : "");
 
-/** Legend doubles as the sector picker: hover or focus isolates a sector. */
+/** Legend doubles as the sector picker: click a sector to isolate it, again to clear. */
 function SectorLegend({ active, onPick }: { active: SectorKey | null; onPick: (s: SectorKey | null) => void }) {
   return (
-    <div className="flex gap-1" onMouseLeave={() => onPick(null)}>
+    <div className="flex gap-1">
       {(["s1", "s2", "s3"] as const).map((s, i) => (
         <button
           key={s}
           type="button"
-          onMouseEnter={() => onPick(s)}
-          onFocus={() => onPick(s)}
-          onBlur={() => onPick(null)}
+          onClick={() => onPick(active === s ? null : s)}
           aria-pressed={active === s}
           className={`timing flex items-center gap-1.5 rounded-row px-2 py-1 text-micro uppercase tracking-wider
             transition-colors duration-micro ease-out-expo
@@ -193,8 +191,7 @@ export default function TrackMap({ circuitName, outline }: { circuitName?: strin
           MONACO_CORNERS.map((c) => (
             <g
               key={c.id}
-              onMouseEnter={() => setHovered(c)}
-              onMouseLeave={() => setHovered(null)}
+              onClick={() => setHovered((h) => (h?.id === c.id ? null : c))}
               className="cursor-pointer"
             >
               <circle cx={c.x} cy={c.y} r="11" fill="transparent" />
@@ -241,7 +238,7 @@ export default function TrackMap({ circuitName, outline }: { circuitName?: strin
               ) : showCorners ? (
                 <>
                   <Flag size={13} className="text-f1red" />
-                  Hover a corner marker for apex telemetry
+                  Click a corner marker for apex telemetry
                 </>
               ) : (
                 <>

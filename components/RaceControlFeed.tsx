@@ -83,7 +83,7 @@ export default function RaceControlFeed({ messages }: { messages: any[] }) {
                 variants={rowReveal}
                 initial={forceVisible ? false : "hidden"}
                 animate="show"
-                className="flex items-start gap-3 px-3 py-2 transition-colors duration-micro ease-out-expo hover:bg-carbon-800/40"
+                className="flex items-start gap-3 px-3 py-2"
               >
                 {/* Timing gutter — fixed width so bursts stay aligned */}
                 <div className="timing w-14 shrink-0 pt-0.5 text-right">

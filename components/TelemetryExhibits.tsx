@@ -12,12 +12,12 @@
  *
  * Motion: a list cascades in when it scrolls into view (rows, then their
  * bars), and the purple row gets a brief wash once the cascade lands.
- * Figures never animate — they're read across rows. Hovering a driver in
- * any list dims everyone else in EVERY list (DriverHover), so one driver
- * can be followed down the page.
+ * Figures never animate — they're read across rows. Nothing here reacts
+ * to the pointer: rows are for reading, and a page that dims and lights
+ * as the mouse crosses it was distracting.
  */
 
-import { ReactNode, createContext, useContext, useMemo, useRef, useState } from "react";
+import { ReactNode, useRef, useState } from "react";
 import { motion, useInView } from "framer-motion";
 import { EASE, rowDelay } from "@/lib/motion";
 import { useForceVisible } from "./MotionProvider";
@@ -29,34 +29,6 @@ export type People = Record<string, { thumb?: string | null; teamColor?: string;
 const PURPLE = "#B44CFF";
 const GREEN = "#2EE07C";
 const NEUTRAL = "#8B95A7";
-
-/* ---- Shared hover: one driver lit across the whole page ------------------ */
-
-const HoverCtx = createContext<{ code: string | null; set: (c: string | null) => void }>({ code: null, set: () => {} });
-
-/**
- * Holds the hovered driver. It takes `children` as a prop on purpose: when
- * the hover changes only the lists that read the context re-render — the
- * charts between them (position chart, track map) are left alone.
- */
-export function DriverHover({ children }: { children: ReactNode }) {
-  const [code, set] = useState<string | null>(null);
-  const value = useMemo(() => ({ code, set }), [code]);
-  return <HoverCtx.Provider value={value}>{children}</HoverCtx.Provider>;
-}
-export const useDriverHover = () => useContext(HoverCtx);
-
-/** Props for a row that takes part in the shared hover. */
-export function hoverRow(hover: { code: string | null; set: (c: string | null) => void }, code: string) {
-  return {
-    onMouseEnter: () => hover.set(code),
-    onMouseLeave: () => hover.set(null),
-    /* Dim the row's cells, not the row: the row's own opacity belongs to
-       its entrance animation. */
-    dim: hover.code && hover.code !== code ? "[&>*]:opacity-25" : "",
-  };
-}
-const CELL_FADE = "[&>*]:transition-opacity [&>*]:duration-150";
 
 /* ---- Entrance: a list reveals once, when it's seen ----------------------- */
 
@@ -148,7 +120,6 @@ export function RankList({
   /** Extra colour for a row's figure (e.g. FIA green for a near-best). */
   valueClass?: (row: RankRow, i: number) => string | undefined;
 }) {
-  const hover = useDriverHover();
   if (!rows.length) return <p className="text-data text-carbon-400">No data for this session.</p>;
   const best = rows[0].value;
   const values = rows.map((r) => r.value);
@@ -162,15 +133,13 @@ export function RankList({
         const color = r.color ?? who.teamColor ?? NEUTRAL;
         const gap = Math.abs(r.value - best);
         const pct = mode === "gap" ? gap / maxGap : (r.value - floor) / (hi - floor || 1);
-        const { dim, ...handlers } = hoverRow(hover, r.code);
         return (
           <motion.li
             key={`${r.code}-${i}`}
             custom={i}
             variants={rowIn}
             title={who.name}
-            {...handlers}
-            className={`relative grid items-center gap-2 py-[3px] ${CELL_FADE} ${dim} ${
+            className={`relative grid items-center gap-2 py-[3px] ${
               compact ? "grid-cols-[1.5rem_2.25rem_1fr_auto]" : "grid-cols-[1rem_1.5rem_2.5rem_1fr_auto]"
             }`}
           >
@@ -320,22 +289,19 @@ export function SpeedAndPace({ data, people }: { data: any; people: People }) {
 /* ---- Tyre stints -------------------------------------------------------- */
 
 export function StintBoard({ stints, totalLaps, people }: { stints: any[]; totalLaps: number; people: People }) {
-  const hover = useDriverHover();
   const used = [...new Set(stints.flatMap((d) => d.stints.map((s: any) => s.compound)))].filter((c) => COMPOUND[c as string]) as string[];
   return (
     <div>
       <Reveal>
         {stints.map((driver, row) => {
           const who = people[driver.code] ?? {};
-          const { dim, ...handlers } = hoverRow(hover, driver.code);
           return (
             <motion.li
               key={driver.code}
               custom={row}
               variants={rowIn}
               title={who.name}
-              {...handlers}
-              className={`grid grid-cols-[1.5rem_2.5rem_1fr] items-center gap-2 py-[3px] ${CELL_FADE} ${dim}`}
+              className="grid grid-cols-[1.5rem_2.5rem_1fr] items-center gap-2 py-[3px]"
             >
               <Face src={who.thumb} color={who.teamColor ?? NEUTRAL} size={22} />
               <span className="timing text-label font-bold text-carbon-100">{driver.code}</span>
@@ -353,7 +319,7 @@ export function StintBoard({ stints, totalLaps, people }: { stints: any[]; total
                     <span
                       key={i}
                       title={`${s.compound} · laps ${s.from}–${s.to} (${s.to - s.from + 1})`}
-                      className="h-full border-r-2 border-black last:border-r-0 hover:brightness-125"
+                      className="h-full border-r-2 border-black last:border-r-0"
                       style={{ width: `${((s.to - s.from + 1) / totalLaps) * 100}%`, background: COMPOUND[s.compound] ?? "#5B6678" }}
                     />
                   ))}
@@ -375,7 +341,7 @@ export function StintBoard({ stints, totalLaps, people }: { stints: any[]; total
             {c.toLowerCase()}
           </span>
         ))}
-        <span className="text-carbon-500">Hover a stint for its laps</span>
+        <span className="text-carbon-500">Point at a stint for its laps</span>
       </p>
     </div>
   );
