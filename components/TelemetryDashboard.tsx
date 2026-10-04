@@ -29,6 +29,7 @@ import ScheduleStrip from "./ScheduleStrip";
 import PositionWormChart from "./PositionWormChart";
 import RaceControlFeed from "./RaceControlFeed";
 import MockDataBanner from "./MockDataBanner";
+import PublisherNotice, { usePublisherLag, PublisherLag } from "./PublisherNotice";
 
 type Feeds = Partial<Record<
   "session" | "sectors" | "stints" | "pitStops" | "degradation" | "positions" | "performance" | "schedule" | "standings" | "trackOutline" | "worm" | "control",
@@ -170,7 +171,7 @@ function Fact({ label, value, sub, i }: { label: string; value: ReactNode; sub?:
   );
 }
 
-function Podium({ session, feed, positions, pitStops }: { session: any; feed: any; positions?: any[]; pitStops?: any[] }) {
+function Podium({ session, feed, positions, pitStops, lag }: { session: any; feed: any; positions?: any[]; pitStops?: any[]; lag: PublisherLag }) {
   const forceVisible = useForceVisible();
   const top = useMemo(
     () => (positions ?? []).filter((p) => !p.dnf && p.finish >= 1 && p.finish <= 3).sort((a, b) => a.finish - b.finish),
@@ -233,7 +234,13 @@ function Podium({ session, feed, positions, pitStops }: { session: any; feed: an
             }
             sub={p1 && p2 ? `${p1.code} over ${p2.code}` : undefined}
           />
-          <Fact i={1} label="Fastest lap" value={fastest?.fastestLap ?? "—"} sub={fastest ? `${fastest.code} · ${fastest.teamName}` : undefined} />
+          <Fact
+            i={1}
+            label="Fastest lap"
+            value={fastest?.fastestLap ?? "—"}
+            /* The award comes with the provider's official result. */
+            sub={fastest ? `${fastest.code} · ${fastest.teamName}` : lag?.state === "bridged" ? "with the official result" : undefined}
+          />
           <Fact
             i={2}
             label="Biggest climber"
@@ -504,6 +511,8 @@ export default function TelemetryDashboard() {
   const [d, setD] = useState<Feeds>({});
   const [feed, setFeed] = useState<any>({ mode: "loading", live: 0, total: 0, detail: {} });
   const [active, setActive] = useState<string | null>(null);
+  /* Set while the results provider is behind — see PublisherNotice. */
+  const lag = usePublisherLag();
 
   useEffect(() => {
     let cancelled = false;
@@ -563,12 +572,18 @@ export default function TelemetryDashboard() {
 
   const mock = (k: string) => feed.detail?.[k] === "mock";
   const s = d.session;
+  /* Standings come from the results provider. While it is behind, they
+     stand where its last published race left them — whatever round number
+     the provider's own standings label carries. */
+  const standingsRound = lag ? lag.publishedRound : d.standings?.afterRound ?? s.round;
   /* Who's who, for the faces and team colours in every list. */
   const people: People = Object.fromEntries((d.positions ?? []).map((p: any) => [p.code, { thumb: p.thumb, teamColor: p.teamColor, name: p.name }]));
 
   return (
+    <>
+    <PublisherNotice page="telemetry" />
     <main className="w-full min-w-0 bg-black">
-      <Podium session={s} feed={feed} positions={d.positions} pitStops={d.pitStops} />
+      <Podium session={s} feed={feed} positions={d.positions} pitStops={d.pitStops} lag={lag} />
       <Rail active={active} />
 
       <div className="mx-auto w-full max-w-[1400px] space-y-20 px-4 pb-24 pt-10 sm:px-8 xl:pr-48">
@@ -641,8 +656,12 @@ export default function TelemetryDashboard() {
           </div>
         </Chapter>
 
-        <Chapter n={5} id="season" title="The season" lede={`Where the championships stand after round ${d.standings?.afterRound ?? s.round}, and what comes next.`}>
-          <Block eyebrow={`After round ${d.standings?.afterRound ?? s.round}`} title="Championship standings" mock={mock("standings")}>
+        <Chapter n={5} id="season" title="The season" lede={`Where the championships stand after round ${standingsRound}, and what comes next.`}>
+          <Block
+            eyebrow={lag ? `After round ${standingsRound} · round ${lag.round} not counted yet` : `After round ${standingsRound}`}
+            title="Championship standings"
+            mock={mock("standings")}
+          >
             {d.standings ? <StandingsBoard standings={d.standings} /> : <Loading h={300} />}
           </Block>
           <Block eyebrow={`Season ${d.schedule.season}`} title="Calendar" mock={mock("schedule")}>
@@ -658,5 +677,6 @@ export default function TelemetryDashboard() {
         </footer>
       </div>
     </main>
+    </>
   );
 }

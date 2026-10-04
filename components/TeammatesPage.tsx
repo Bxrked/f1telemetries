@@ -9,6 +9,7 @@ import { useForceVisible } from "./MotionProvider";
 import MockDataBanner from "./MockDataBanner";
 import CountUp from "./CountUp";
 import DriverSide from "./DriverCutout";
+import PublisherNotice from "./PublisherNotice";
 
 /**
  * Teammate battles — one team per screen, the whole season so far.
@@ -248,8 +249,11 @@ export default function TeammatesPage() {
   const team = teams[index];
 
   return (
-    /* flex-1 + min-h-0: exactly the space the nav leaves, like the landing
-       page. touch-none: a swipe steps teams instead of rubber-banding. */
+    <>
+    <PublisherNotice page="teammates" />
+    {/* flex-1 + min-h-0: exactly the space the nav (and the notice, when
+        there is one) leaves, like the landing page. touch-none: a swipe
+        steps teams instead of rubber-banding. */}
     <main
       ref={stageRef}
       className="relative min-h-0 w-full flex-1 touch-none overflow-hidden bg-black"
@@ -339,5 +343,6 @@ export default function TeammatesPage() {
         </div>
       )}
     </main>
+    </>
   );
 }

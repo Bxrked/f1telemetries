@@ -11,6 +11,7 @@ import { GRID, TICK, AXIS_LINE, COMPOUND as COMPOUND_HEX } from "@/lib/chartThem
 import TyreStintTimeline from "./TyreStintTimeline";
 import CountUp from "./CountUp";
 import DriverSide, { isLight } from "./DriverCutout";
+import PublisherNotice from "./PublisherNotice";
 import { EASE, SPRING, VIEWPORT, panelReveal } from "@/lib/motion";
 import { useForceVisible } from "./MotionProvider";
 
@@ -587,6 +588,8 @@ export default function ComparePage() {
   const sideMeta = (d: any) => `P${d.finish} · ${d.teamName}`;
 
   return (
+    <>
+    <PublisherNotice page="compare" />
     <main className="w-full min-w-0 bg-black">
       {/* ── Verdict: fills the first screen ─────────────────────────── */}
       <section className="relative flex flex-col lg:h-[calc(100svh-66px)] lg:max-h-[940px] lg:min-h-[640px]">
@@ -718,6 +721,7 @@ export default function ComparePage() {
         forceVisible={forceVisible}
       />
     </main>
+    </>
   );
 }
 

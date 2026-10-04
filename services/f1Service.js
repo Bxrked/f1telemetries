@@ -15,6 +15,7 @@ import { formatLapTime } from "./format";
 import { teamColorFor } from "./teamColors";
 import { fiaRaceSlug, fiaTranscriptUrl } from "./fiaTranscript";
 import { buildTeammateBattles, mergeRaces } from "./teammates";
+import { unpublishedRace, buildBridgedRace, gridFromPositions } from "./raceBridge";
 import {
   buildReference, buildDriverLaps, createTimeline, buildTrackStatus, detectOvertakes, isPenalty,
 } from "./replayModel";
@@ -115,11 +116,130 @@ async function jolpicaSeasonWinners() {
   return map;
 }
 
-async function jolpicaLatestRaceResults() {
-  const json = await fetchJson(`${JOLPICA_BASE}/${SEASON}/last/results.json?limit=100`, { ttl: TTL.results });
+/**
+ * DEV ONLY — rehearse the "Jolpica is behind" state when it isn't.
+ * Open any page with `?pretend=15` and, in that tab, Jolpica's latest
+ * race is taken to be round 15, so the bridge and the notice run for the
+ * round after it. `?pretend=off` ends it. Compiled out of production
+ * builds (NODE_ENV is inlined), so it cannot be switched on there.
+ */
+const PRETEND_KEY = "f1dev:pretendPublishedRound";
+function pretendPublishedRound() {
+  if (process.env.NODE_ENV === "production" || typeof window === "undefined") return null;
+  try {
+    const q = new URLSearchParams(window.location.search).get("pretend");
+    if (q != null) {
+      if (/^\d{1,2}$/.test(q)) window.sessionStorage.setItem(PRETEND_KEY, q);
+      else window.sessionStorage.removeItem(PRETEND_KEY);
+    }
+    const v = window.sessionStorage.getItem(PRETEND_KEY);
+    return v && /^\d{1,2}$/.test(v) ? +v : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Jolpica's own latest race — the site's source of record. */
+async function jolpicaLastResults() {
+  /* limit=30 (a grid is 22), not the 100 this used to ask for: a new URL,
+     so the copies browsers stored for 6 h under the old one aren't reused. */
+  const round = pretendPublishedRound() ?? "last";
+  const json = await fetchJson(`${JOLPICA_BASE}/${SEASON}/${round}/results.json?limit=30`, { ttl: TTL.latest });
   const race = json?.MRData?.RaceTable?.Races?.[0];
   if (!race?.Results?.length) throw new Error("no completed race results yet");
   return race;
+}
+
+/* ================================================================
+ * LATEST RACE — Jolpica, with OpenF1 standing in while Jolpica lags
+ * ----------------------------------------------------------------
+ * Jolpica can take most of a day to publish a race; OpenF1 has it
+ * within the hour. When the calendar says a race has finished that
+ * Jolpica's results don't have yet, the classification is built from
+ * OpenF1 in Jolpica's shape (services/raceBridge.js), so every getter
+ * below works unchanged. Jolpica is asked first every time and wins the
+ * moment it has the race — nothing here replaces it.
+ * ================================================================ */
+
+/** null, or what the site is waiting on — see getPublisherLag(). */
+let publisherLag = null;
+/* A page fires a dozen getters at once; they share one answer. */
+let latestMemo = null;
+const LATEST_MEMO_MS = 30_000;
+
+async function bridgeLatestRace(jolpica) {
+  const table = await jolpicaSchedule();
+  const next = unpublishedRace(table.Races, jolpica.round);
+  if (!next) {
+    publisherLag = null;
+    return null;
+  }
+  /* A finished race Jolpica hasn't published: we are waiting on it,
+     whether or not OpenF1 can stand in (it may be locked or not ready). */
+  publisherLag = { state: "waiting", round: +next.round, publishedRound: +jolpica.round, raceName: next.raceName };
+  const { sessionKey, dateStart } = await resolveOpenF1Session(next);
+  const rows = await fetchJson(`${OPENF1_BASE}/session_result?session_key=${sessionKey}`, { ttl: TTL.latest });
+  /* The timing feed's positions up to two minutes after the start: the
+     first sample per car is the real grid (22 rows, not the whole race). */
+  const gridCut = new Date(new Date(dateStart).getTime() + 120_000).toISOString().slice(0, 19);
+  const [startOrder, qualifying, drivers] = await Promise.all([
+    fetchJson(`${OPENF1_BASE}/position?session_key=${sessionKey}&date<${gridCut}`, { ttl: TTL.results }).catch(() => null),
+    fetchJson(`${JOLPICA_BASE}/${SEASON}/${+next.round}/qualifying.json?limit=100`, { ttl: TTL.latest })
+      .then((j) => j?.MRData?.RaceTable?.Races?.[0]?.QualifyingResults ?? [])
+      .catch(() => []),
+    fetchJson(`${OPENF1_BASE}/drivers?session_key=${sessionKey}`, { ttl: TTL.results }).catch(() => []),
+  ]);
+  const race = buildBridgedRace({
+    race: next,
+    rows,
+    grid: gridFromPositions(startOrder),
+    qualifying,
+    previous: jolpica.Results,
+    drivers: Array.isArray(drivers) ? drivers : [],
+  });
+  if (!race) return null;
+  publisherLag = { ...publisherLag, state: "bridged", grid: race.provisional.grid };
+  return race;
+}
+
+/** The latest race every getter works from: Jolpica's, or the bridge while Jolpica lags. */
+function latestRaceResults() {
+  if (latestMemo && Date.now() - latestMemo.at < LATEST_MEMO_MS) return latestMemo.promise;
+  const promise = (async () => {
+    const jolpica = await jolpicaLastResults(); // throws → the caller's mock fallback, as before
+    try {
+      return (await bridgeLatestRace(jolpica)) ?? jolpica;
+    } catch (err) {
+      /* The bridge is best-effort: any failure leaves the site on Jolpica. */
+      console.warn(`[f1Service] OpenF1 can't stand in for the newest race yet (${err?.message})`);
+      return jolpica;
+    }
+  })();
+  latestMemo = { at: Date.now(), promise };
+  promise.catch(() => {
+    if (latestMemo?.promise === promise) latestMemo = null;
+  });
+  return promise;
+}
+
+/**
+ * What the site is waiting for from its results provider, if anything:
+ *   null                         — Jolpica is up to date
+ *   { state: "bridged", ... }    — showing the newest race from OpenF1;
+ *                                  standings, grid penalties and
+ *                                  retirement reasons aren't in yet
+ *   { state: "waiting", ... }    — the newest race isn't available from
+ *                                  either source; pages show the previous one
+ * plus { round, publishedRound, raceName }. Never throws.
+ */
+export async function getPublisherLag() {
+  if (!USE_LIVE_DATA || typeof fetch === "undefined") return null;
+  try {
+    await latestRaceResults();
+  } catch {
+    return null;
+  }
+  return publisherLag;
 }
 
 const ageFrom = (dobIso) => {
@@ -182,7 +302,7 @@ export async function resolveOpenF1Session(race) {
     (s) => Math.abs(new Date(s.date_start).getTime() - raceTime) < 2 * DAY
   );
   if (!match) throw new Error("no OpenF1 session matched race date");
-  return { sessionKey: match.session_key, meetingKey: match.meeting_key };
+  return { sessionKey: match.session_key, meetingKey: match.meeting_key, dateStart: match.date_start };
 }
 
 async function openF1LatestWeather(sessionKey) {
@@ -447,7 +567,16 @@ export async function getSeasonSchedule() {
   return withFallback(
     "schedule",
     async () => {
-      const [table, winners] = await Promise.all([jolpicaSchedule(), jolpicaSeasonWinners()]);
+      const [table, winners, newest] = await Promise.all([
+        jolpicaSchedule(),
+        jolpicaSeasonWinners(),
+        latestRaceResults().catch(() => null),
+      ]);
+      /* The newest race's winner, even when the season-winners list doesn't
+         have it yet (it is cached longer, and Jolpica may still be behind). */
+      if (newest && !winners[+newest.round]?.winner) {
+        winners[+newest.round] = { winner: newest.Results[0]?.Driver?.code ?? null, laps: +newest.Results[0]?.laps || null };
+      }
       const now = Date.now();
       const rounds = table.Races.map((r) => ({
         round: +r.round,
@@ -547,10 +676,14 @@ export async function getTeammateBattles() {
   return withFallback(
     "teammates",
     async () => {
-      if (battlesMemo && battlesMemo.expires > Date.now()) return battlesMemo.data;
+      /* A stored table is good until it expires OR Jolpica publishes a newer
+         race — otherwise a new result took up to 6 h to reach these tallies. */
+      const published = await jolpicaLastResults().then((r) => +r.round, () => null);
+      const current = (d) => published == null || +d?.afterRound >= published;
+      if (battlesMemo && battlesMemo.expires > Date.now() && current(battlesMemo.data)) return battlesMemo.data;
       try {
         const saved = JSON.parse(window.localStorage.getItem(BATTLES_KEY) ?? "null");
-        if (saved?.expires > Date.now() && saved.data?.teams?.length) {
+        if (saved?.expires > Date.now() && saved.data?.teams?.length && current(saved.data)) {
           battlesMemo = { expires: saved.expires, data: dressBattles(saved.data) };
           return battlesMemo.data;
         }
@@ -672,7 +805,7 @@ export async function getSessionInfo() {
   return withFallback(
     "session",
     async () => {
-      const race = await jolpicaLatestRaceResults();
+      const race = await latestRaceResults();
       const facts = CIRCUIT_FACTS[race.Circuit.circuitId] ?? {};
       /* Weather is best-effort: a miss here shouldn't sink session info. */
       let weather = { ...SESSION.weather };
@@ -709,7 +842,7 @@ export async function getDrivers() {
   return withFallback(
     "drivers",
     async () => {
-      const race = await jolpicaLatestRaceResults();
+      const race = await latestRaceResults();
       return race.Results.map((r) => mapResultRow(r, race.Results.length, race.season));
     },
     async () => {
@@ -872,7 +1005,7 @@ export async function getTrackOutline() {
   return withFallback(
     "trackOutline",
     async () => {
-      const race = await jolpicaLatestRaceResults();
+      const race = await latestRaceResults();
       const { sessionKey } = await resolveOpenF1Session(race);
 
       /* Shared with the replay: computed once per session, not per caller. */
@@ -957,7 +1090,7 @@ export async function getTrackOutline() {
 
 /** Latest race + its OpenF1 session key + classification order. */
 async function openF1Context() {
-  const race = await jolpicaLatestRaceResults();
+  const race = await latestRaceResults();
   const { sessionKey } = await resolveOpenF1Session(race);
   const finishOrder = race.Results.map((r) => +r.number); // car numbers, P1 first
   return { race, sessionKey, finishOrder };
@@ -1872,7 +2005,7 @@ export async function getSessionTrackTrace(sessionKey) {
  * | { status: "not-published" | "unreachable", source }
  */
 export async function getPostRaceInterviews() {
-  const race = await jolpicaLatestRaceResults();
+  const race = await latestRaceResults();
   const slug = fiaRaceSlug(race.raceName);
   const source = fiaTranscriptUrl(race.season, slug);
   try {

@@ -14,6 +14,9 @@ export const TTL = {
   schedule: 6 * 60 * 60 * 1000,   // 6h
   standings: 60 * 60 * 1000,      // 1h
   results: 6 * 60 * 60 * 1000,    // 6h
+  /* "Which race is the latest?" must be asked often: a browser that kept
+     the answer for 6 h sat on the old race long after a new one was out. */
+  latest: 15 * 60 * 1000,         // 15m
   weather: 10 * 60 * 1000,        // 10m
   sessions: 60 * 60 * 1000,       // 1h
 };

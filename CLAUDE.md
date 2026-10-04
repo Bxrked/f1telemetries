@@ -14,7 +14,7 @@ There is **no test framework, linter, or typecheck script** in this project. `np
 
 ### Diagnostic scripts
 
-Six standalone Node scripts hit the live APIs and print geometry/health reports. They are the debugging tool for this codebase — read-only, no install, no dev server:
+Seven standalone Node scripts hit the live APIs and print geometry/health reports. They are the debugging tool for this codebase — read-only, no install, no dev server:
 
 ```bash
 node diag.mjs        # what OpenF1 actually returns for the track trace (loop closure, teleports, grid-vs-track bounds)
@@ -23,6 +23,7 @@ node diag-track.mjs  # reproduces getTrackOutline() + replay dot placement, repo
 LAP_M=6003 node diag-replay.mjs [session_key]  # replay lap-mode placement vs real GPS, in metres (LAP_M = circuit length)
 node diag-interviews.mjs [year slug]           # FIA transcript parser against fia.com (e.g. 2026 monaco)
 node diag-teammates.mjs [season]               # teammate battle tables from the live season (default: current)
+node diag-bridge.mjs [round]                   # is Jolpica behind, and what OpenF1 would stand in with (round = pretend Jolpica stops there)
 ```
 
 Reach for these before touching track-tracing or replay coordinate code. They exist because that code failed in ways only visible against real API responses.
@@ -46,6 +47,19 @@ Components never fetch directly. Every network call goes through `fetchJson` in 
 - **OpenF1** (`api.openf1.org`) — telemetry-grade data: laps, stints, pit, location, position, race control, team radio.
 
 These have no shared identifier. `resolveOpenF1Session(race)` bridges them by **matching a Jolpica race to an OpenF1 race session within a 2-day window of the race date**, returning the `session_key` every OpenF1 endpoint requires. Any new telemetry getter starts by calling `openF1Context()`, which does this and also returns the classification finish order.
+
+### The latest race: Jolpica, with OpenF1 standing in while it lags
+
+**Jolpica is the source of record for "the latest race" and must stay that way.** It is volunteer-run and can take most of a day to publish a race; OpenF1 has a classification within the hour. `latestRaceResults()` in `f1Service.js` is what every getter calls (never `jolpicaLastResults()` directly):
+
+1. Ask Jolpica first, every time (`TTL.latest`, 15 min — the old 6 h copy is why a new race used to take half a day to appear).
+2. If the calendar has a finished race Jolpica's results don't (`unpublishedRace`: started > 3.5 h ago, < 7 days ago), build that race **in Jolpica's shape** from OpenF1 `session_result` (`services/raceBridge.js`, pure). Every getter downstream works unchanged.
+3. The bridge is best-effort: any failure (OpenF1 locked, no session, unusable rows) returns Jolpica's race. The moment Jolpica publishes, step 2 finds nothing and the site is back on Jolpica — there is no switch to flip.
+
+- **Grid** comes from the timing feed's first `/position` sample per car (penalties applied — 22/22 against Jolpica at Sepang 2026, where 14 cars started out of their qualifying slot); fallbacks are qualifying order, then finishing order (never invented gains). Driver/team identity comes from Jolpica (that round's qualifying, then the previous race); OpenF1 names are the last resort.
+- **What a bridged race can't have:** championship standings, why a car retired (status is just `"Retired"`), the fastest-lap award, later steward changes. Don't guess them.
+- `getPublisherLag()` → `null | { state: "bridged" | "waiting", round, publishedRound, raceName, grid? }`. `PublisherNotice` (Telemetry, Replay, Head-to-Head, Teammates) shows a strip under the nav while it is non-null; it is **deliberately not dismissible** and removes itself. Standings are labelled with the round they actually cover. Teammates is Jolpica-only, so the newest race simply isn't counted there until it's published (its cache is dropped when Jolpica's round moves on).
+- **Rehearsing it:** Jolpica is usually up to date, so in dev open any page with `?pretend=15` (Jolpica "stops" at round 15, kept in sessionStorage for the tab; `?pretend=off` ends it). The switch is compiled out of production builds. `node diag-bridge.mjs 15` does the same from the terminal and diffs the bridge against Jolpica's real result.
 
 ### The fallback contract
 
