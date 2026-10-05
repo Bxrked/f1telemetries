@@ -7,14 +7,15 @@
  * decides when each one shows.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { RotateCcw, X, ChevronsRight } from "lucide-react";
+import { RotateCcw, X, ChevronsRight, Square } from "lucide-react";
 import { EASE } from "@/lib/motion";
 import { COMPOUND } from "@/lib/chartTheme";
 import DriverSide, { Helmet } from "../DriverCutout";
 import PodiumDriver from "../PodiumDriver";
 import { EVENT_COLOR } from "./ReplayTimeline";
+import { Face } from "../TelemetryExhibits";
 
 const WORDS = (name: string) =>
   String(name ?? "")
@@ -271,8 +272,10 @@ const MOMENT_LABEL: Record<string, string> = {
  * A notable event, said the way the rest of the site says things: small
  * mono label, big italic line, a rule in the driver's team colour.
  */
-export function Moment({ event, color, compact = false }: { event: any; color?: string; compact?: boolean }) {
+export function Moment({ event, color, driver, compact = false }: { event: any; color?: string; driver?: any; compact?: boolean }) {
   const c = color ?? EVENT_COLOR[event.type] ?? "#E7EAF0";
+  /* A fastest lap gets the timing-screen treatment instead of a headline. */
+  if (event.type === "fastest" && event.time && driver?.code) return <FastestLapCall event={event} driver={driver} compact={compact} />;
   return (
     <motion.div
       /* Centred with auto margins. A -translate-x-1/2 class is wiped by
@@ -306,6 +309,138 @@ export function Moment({ event, color, compact = false }: { event: any; color?: 
         />
       </span>
     </motion.div>
+  );
+}
+
+/* ---- Fastest lap and team radio: the two broadcast graphics -------------- */
+
+/**
+ * Fastest lap, the way a race broadcast calls it: a purple slab, who, and
+ * the time in timing-screen purple. Same slot and lifetime as a Moment.
+ * Everything that moves is a transform — the slab wipes with scaleX, the
+ * name and the time rise out of their masks.
+ */
+export function FastestLapCall({ event, driver, compact = false }: { event: any; driver: any; compact?: boolean }) {
+  const team = driver.teamColor ?? "#8B95A7";
+  const rise = (delay: number) => ({
+    initial: { y: "105%" },
+    animate: { y: "0%", transition: { duration: 0.45, ease: EASE.out, delay } },
+  });
+  return (
+    <motion.div
+      role="status"
+      aria-label={`Lap ${event.lap}: fastest lap, ${driver.name ?? driver.code}, ${event.time}`}
+      /* Centred with auto margins, like Moment: the x animation owns `transform`. */
+      className={`pointer-events-none absolute inset-x-0 z-10 mx-auto flex w-max max-w-full items-stretch overflow-hidden bg-carbon-900/95 shadow-panel ${compact ? "top-2 h-10" : "top-3 h-11"}`}
+      initial={{ opacity: 0, x: -18 }}
+      animate={{ opacity: 1, x: 0, transition: { duration: 0.4, ease: EASE.out } }}
+      exit={{ opacity: 0, x: 14, transition: { duration: 0.25, ease: EASE.in } }}
+    >
+      <span className="relative flex items-center px-3" aria-hidden>
+        <motion.span
+          className="absolute inset-0 origin-left bg-sector-purple"
+          initial={{ scaleX: 0 }}
+          animate={{ scaleX: 1, transition: { duration: 0.35, ease: EASE.out, delay: 0.05 } }}
+        />
+        <span className="timing relative text-micro font-bold uppercase leading-[1.2] tracking-[0.16em] text-carbon-950">
+          Fastest
+          <br />
+          lap
+        </span>
+      </span>
+      <span className="w-[3px] shrink-0" style={{ background: team }} aria-hidden />
+      <span className="flex items-center gap-2.5 pl-2.5 pr-3" aria-hidden>
+        <Face src={driver.thumb} color={team} size={compact ? 26 : 28} />
+        <span className="overflow-hidden pr-[0.12em]">
+          <motion.span className="block font-display text-xl font-black uppercase italic leading-none tracking-tight text-carbon-100" {...rise(0.18)}>
+            {driver.code}
+          </motion.span>
+        </span>
+      </span>
+      <span className="flex items-center border-l border-carbon-700 px-3" aria-hidden>
+        <span className="overflow-hidden">
+          <motion.span className="timing block text-lg font-bold leading-none text-sector-purple" {...rise(0.28)}>
+            {event.time}
+          </motion.span>
+        </span>
+      </span>
+      <span className="hidden items-center pr-3 xl:flex" aria-hidden>
+        <span className="eyebrow whitespace-nowrap">Lap {event.lap}</span>
+      </span>
+    </motion.div>
+  );
+}
+
+/* Resting heights of the waveform's bars (% of the row), and how each
+   one breathes. Fixed numbers, so it looks the same on every render. */
+const WAVE = [38, 62, 84, 52, 96, 70, 44, 88, 58, 100, 66, 40, 78, 54, 90, 48, 72, 36];
+
+/** "Someone is talking" — not a level meter: the audio comes from another origin and can't be measured. */
+function Waveform({ color }: { color: string }) {
+  return (
+    <span className="flex h-6 items-center gap-[2px]" aria-hidden>
+      {WAVE.map((h, i) => (
+        <motion.span
+          key={i}
+          /* Phones get the first eight bars: the whole row doesn't fit beside the name. */
+          className={`w-[2px] origin-center ${i >= 8 ? "hidden sm:block" : ""}`}
+          style={{ height: `${h}%`, background: color }}
+          animate={{ scaleY: [0.35, 1, 0.55, 0.9, 0.35] }}
+          transition={{ duration: 0.7 + (i % 5) * 0.11, repeat: Infinity, ease: "easeInOut", delay: (i * 0.07) % 0.6 }}
+        />
+      ))}
+    </span>
+  );
+}
+
+/**
+ * Team radio, on air: whose voice it is, a waveform while it plays, and
+ * a line along the foot for how far through the clip is. There is no
+ * transcript to show — OpenF1 has audio only, and words are never invented.
+ * `progress` is read every frame and written straight to the bar (per-frame
+ * values don't go through React state here).
+ */
+export function RadioCall({ driver, progress, onStop }: { driver: any; progress: () => number | null; onStop: () => void }) {
+  const team = driver?.teamColor ?? "#8B95A7";
+  const bar = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    let raf = 0;
+    const tick = () => {
+      if (bar.current) bar.current.style.transform = `scaleX(${progress() ?? 0})`;
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [progress]);
+  return (
+    <span className="relative flex items-stretch bg-carbon-900/95 shadow-panel" role="status" aria-label={`Team radio: ${driver?.name ?? driver?.code ?? "driver"}`}>
+      <span className="w-[3px] shrink-0" style={{ background: team }} aria-hidden />
+      <span className="flex items-center gap-3 py-2 pl-2.5 pr-2">
+        <Face src={driver?.thumb} color={team} size={36} />
+        <span className="min-w-0">
+          {/* The label stays neutral: a dark team colour (Red Bull's blue) was hard to read as text. */}
+          <span className="timing flex items-center gap-1.5 text-micro font-bold uppercase tracking-[0.18em] text-carbon-300">
+            <span className="h-1.5 w-1.5 animate-pulse-dot rounded-full" style={{ background: team }} aria-hidden />
+            Team radio
+          </span>
+          <span className="mt-0.5 block max-w-[9rem] truncate font-display sm:max-w-[11rem] text-lg font-black uppercase italic leading-none tracking-tight text-carbon-100">
+            {driver?.name ?? driver?.code}
+          </span>
+        </span>
+        <Waveform color={team} />
+        <button
+          type="button"
+          onClick={onStop}
+          aria-label="Stop team radio"
+          className="grid h-7 w-7 shrink-0 place-items-center rounded-row border border-carbon-700 text-carbon-300 transition-colors duration-micro hover:border-carbon-600 hover:text-carbon-100"
+        >
+          <Square size={10} fill="currentColor" />
+        </button>
+      </span>
+      <span className="absolute inset-x-0 bottom-0 h-[2px] bg-carbon-700" aria-hidden>
+        <span ref={bar} className="block h-full origin-left" style={{ background: team, transform: "scaleX(0)" }} />
+      </span>
+    </span>
   );
 }
 

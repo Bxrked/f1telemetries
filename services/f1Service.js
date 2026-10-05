@@ -1638,7 +1638,10 @@ export async function getReplayTimeline() {
       timed.forEach((l) => {
         if (l.d >= bestLap) return;
         bestLap = l.d;
-        if (l.n >= start.lap + 4) events.push(ev(l.end, "fastest", `${code(l.num)} fastest lap · ${formatLapTime(l.d)}`, [l.num]));
+        if (l.n < start.lap + 4) return;
+        const e = ev(l.end, "fastest", `${code(l.num)} fastest lap · ${formatLapTime(l.d)}`, [l.num]);
+        e.time = formatLapTime(l.d); // on its own, for the fastest-lap graphic
+        events.push(e);
       });
 
       timeline.nums
@@ -1701,6 +1704,10 @@ export async function getReplayTimeline() {
         reference,
         status,
         events,
+        /* The clips again, in time order, for the clock loop: it plays each
+           one as the playhead crosses it. (This was built but never
+           returned, so radio only ever played when clicked.) */
+        radio,
         stints,
         pits,
       };

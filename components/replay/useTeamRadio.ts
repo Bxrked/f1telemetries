@@ -102,11 +102,17 @@ export function useTeamRadio() {
     if (clip) start(clip);
   }, [start]);
 
+  /** How far through the clip on air (0–1), or null before its length is known. Read per frame. */
+  const progress = useCallback(() => {
+    const el = audioRef.current;
+    return el && el.duration > 0 && Number.isFinite(el.duration) ? Math.min(1, el.currentTime / el.duration) : null;
+  }, []);
+
   /* Never leave audio playing behind the page. */
   useEffect(() => () => audioRef.current?.pause(), []);
 
   return useMemo(
-    () => ({ current, blocked, speakingRef, play, enqueue, stop, setRacePlaying, unblock }),
-    [current, blocked, play, enqueue, stop, setRacePlaying, unblock]
+    () => ({ current, blocked, speakingRef, play, enqueue, stop, setRacePlaying, unblock, progress }),
+    [current, blocked, play, enqueue, stop, setRacePlaying, unblock, progress]
   );
 }

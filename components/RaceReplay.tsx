@@ -3,12 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { Play, Pause, SkipBack, SkipForward, ChevronsLeft, ChevronsRight, Volume2, VolumeX, Square, PanelRightClose, PanelRightOpen } from "lucide-react";
+import { Play, Pause, SkipBack, SkipForward, ChevronsLeft, ChevronsRight, Volume2, VolumeX, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { getReplayTimeline, getReplayGpsWindow, getTrackOutline, getPostRaceInterviews } from "@/services/f1Service";
 import { createGpsBuffer, floorIndex } from "@/services/replayModel";
 import { EASE, SPRING, PRESS } from "@/lib/motion";
 import { useForceVisible } from "./MotionProvider";
-import { GridIntro, DriverCard, Moment, PodiumFinish, CardStats } from "./replay/ReplayStage";
+import { GridIntro, DriverCard, Moment, RadioCall, PodiumFinish, CardStats } from "./replay/ReplayStage";
 import ReplayCanvas, { ReplayClock } from "./replay/ReplayCanvas";
 import ReplayTimeline from "./replay/ReplayTimeline";
 import TimingTower from "./replay/TimingTower";
@@ -491,6 +491,7 @@ export default function RaceReplay() {
                   key={lowerThird.key}
                   event={lowerThird}
                   color={lowerThird.nums?.length ? drv(lowerThird.nums[0]).teamColor : undefined}
+                  driver={lowerThird.nums?.length ? drv(lowerThird.nums[0]) : undefined}
                   compact
                 />
               )}
@@ -598,7 +599,11 @@ export default function RaceReplay() {
           <AnimatePresence>
             {lowerThird && !showPodium && (
               <div key={lowerThird.key} className="absolute inset-x-0 top-10 lg:hidden">
-                <Moment event={lowerThird} color={lowerThird.nums?.length ? drv(lowerThird.nums[0]).teamColor : undefined} />
+                <Moment
+                  event={lowerThird}
+                  color={lowerThird.nums?.length ? drv(lowerThird.nums[0]).teamColor : undefined}
+                  driver={lowerThird.nums?.length ? drv(lowerThird.nums[0]) : undefined}
+                />
               </div>
             )}
           </AnimatePresence>
@@ -612,11 +617,12 @@ export default function RaceReplay() {
               {(radio.current || radio.blocked) && (
                 <motion.div
                   key={radio.blocked ? "blocked" : radio.current!.url}
-                  className="pointer-events-auto flex items-stretch self-end overflow-hidden lg:ml-auto"
-                  initial={{ clipPath: "inset(0 0 0 100%)" }}
-                  animate={{ clipPath: "inset(0 0 0 0%)" }}
-                  exit={{ clipPath: "inset(0 100% 0 0)", transition: { duration: 0.25, ease: EASE.in } }}
-                  transition={{ duration: 0.45, ease: EASE.out }}
+                  className="pointer-events-auto flex items-stretch self-end lg:ml-auto"
+                  /* Slides in from the edge (a transform; the clip-path wipe it replaced repainted every frame). */
+                  initial={{ opacity: 0, x: 28 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 28, transition: { duration: 0.25, ease: EASE.in } }}
+                  transition={{ duration: 0.4, ease: EASE.out }}
                 >
                   {radio.blocked ? (
                     <button
@@ -627,26 +633,7 @@ export default function RaceReplay() {
                       <Volume2 size={13} /> Browser muted radio · tap to hear it
                     </button>
                   ) : (
-                    <>
-                      <span className="w-1" style={{ background: data.drivers[radio.current!.num]?.teamColor }} />
-                      <span className="flex items-center gap-3 bg-carbon-950/95 py-1.5 pl-3 pr-2">
-                        <span>
-                          <span className="eyebrow block">Team radio</span>
-                          <span className="font-display text-base font-bold uppercase tracking-wide text-carbon-100">
-                            {data.drivers[radio.current!.num]?.name ?? data.drivers[radio.current!.num]?.code}
-                          </span>
-                        </span>
-                        <RadioBars color={data.drivers[radio.current!.num]?.teamColor} />
-                        <button
-                          type="button"
-                          onClick={radio.stop}
-                          aria-label="Stop team radio"
-                          className="grid h-7 w-7 place-items-center rounded-row border border-carbon-700 text-carbon-300 transition-colors duration-micro hover:border-carbon-600 hover:text-carbon-100"
-                        >
-                          <Square size={10} fill="currentColor" />
-                        </button>
-                      </span>
-                    </>
+                    <RadioCall driver={data.drivers[radio.current!.num]} progress={radio.progress} onStop={radio.stop} />
                   )}
                 </motion.div>
               )}
@@ -832,22 +819,5 @@ export default function RaceReplay() {
         )}
       </AnimatePresence>
     </div>
-  );
-}
-
-/** Four bars bouncing out of phase — "someone is talking", not a real level meter. */
-function RadioBars({ color }: { color?: string }) {
-  return (
-    <span className="flex h-4 items-end gap-[2px]" aria-hidden>
-      {[0, 1, 2, 3].map((i) => (
-        <motion.span
-          key={i}
-          className="w-[3px]"
-          style={{ background: color ?? "#E7EAF0" }}
-          animate={{ height: ["30%", "100%", "45%", "85%", "30%"] }}
-          transition={{ duration: 0.9, repeat: Infinity, ease: "easeInOut", delay: i * 0.13 }}
-        />
-      ))}
-    </span>
   );
 }
