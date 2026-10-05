@@ -19,7 +19,7 @@
  */
 
 import {
-  buildReference, buildDriverLaps, createTimeline, buildTrackStatus,
+  buildReference, buildDriverLaps, createTimeline, buildTrackStatus, detectStart,
   detectOvertakes, refDistAt, pointAtDist, floorIndex,
 } from "./services/replayModel.js";
 
@@ -81,8 +81,19 @@ const driverLaps = buildDriverLaps(laps);
 const maxLap = Math.max(...laps.map((l) => l.lap_number));
 const finishers = new Set(Object.entries(driverLaps).filter(([, ls]) => ls.at(-1).n >= maxLap - 3).map(([n]) => +n));
 const pitRows = pits.filter((p) => p.date && p.pit_duration > 0).map((p) => ({ num: p.driver_number, t: Date.parse(p.date), lane: p.pit_duration, lap: p.lap_number }));
-const tl = createTimeline({ reference: ref, laps: driverLaps, finishers, pits: pitRows });
+/* The grid, as the app's stand-in reads it: each car's first position sample. */
+const grid = {};
+[...positions].sort((a, b) => a.date.localeCompare(b.date)).forEach((p) => (grid[p.driver_number] ??= p.position));
+/* How the race began — null unless it started behind the safety car. */
+const lateStart = detectStart(rc, driverLaps);
+const tl = createTimeline({ reference: ref, laps: driverLaps, finishers, pits: pitRows, grid, start: lateStart });
 console.log(`timeline: ${tl.nums.length} cars, ${tl.totalLaps} laps, race ${((tl.raceEnd - tl.raceStart) / 60000).toFixed(1)} min`);
+const hms = (t) => new Date(t).toISOString().slice(11, 19);
+console.log(
+  lateStart
+    ? `start: BEHIND THE SAFETY CAR from ${hms(tl.raceStart)} · "${lateStart.kind} start" called ${hms(lateStart.announcedAt)} · racing from lap ${tl.start.lap} at ${hms(tl.start.t)} (${((tl.start.t - tl.raceStart) / 60000).toFixed(1)} min in)`
+    : `start: lights out on lap 1 at ${hms(tl.raceStart)}`
+);
 
 /* ---- Pit timestamp semantics ----
    Compare pit.date with the end of the lap it's filed under. If it
@@ -97,12 +108,12 @@ const ratio = offsets.map((o) => o.after / o.lane).sort((a, b) => a - b);
 console.log(`pit.date vs in-lap end: ${offsets.length} stops · (date − lap end) ÷ lane time: median ${ratio[Math.floor(ratio.length / 2)]?.toFixed(2)}, range ${ratio[0]?.toFixed(2)}…${ratio.at(-1)?.toFixed(2)}`);
 
 /* ---- Track status + overtakes ---- */
-const status = buildTrackStatus(rc, tl.leaderStarts, tl.raceEnd);
-console.log(`track status: ${status.map((s) => `${s.type.toUpperCase()} L${tl.lapAt(s.from)}–L${tl.lapAt(s.to)} (${((s.to - s.from) / 1000).toFixed(0)}s)`).join(", ") || "none"}`);
+const status = buildTrackStatus(rc, tl.leaderStarts, tl.raceEnd, lateStart ? tl.start : null);
+console.log(`track status: ${status.map((s) => `${s.type.toUpperCase()} L${tl.lapAt(s.from)}–L${tl.lapAt(s.to)} (${((s.to - s.from) / 1000).toFixed(0)}s)${s.start ? " [start]" : ""}${s.upgraded ? " [upgraded to SC]" : ""}`).join(", ") || "none"}`);
 const pitTimes = {};
 pitRows.forEach((p) => (pitTimes[p.num] ??= []).push(p.t));
-const passes = detectOvertakes(positions, { raceStart: tl.raceStart, pitTimes, excludeDuring: status });
-console.log(`overtakes: ${passes.length}`);
+const passes = detectOvertakes(positions, { raceStart: tl.start.t, pitTimes, excludeDuring: status });
+console.log(`overtakes: ${passes.length}${passes.length ? ` (first lap ${tl.lapAt(passes[0].t)}, last lap ${tl.lapAt(passes.at(-1).t)})` : ""}`);
 
 /* ---- Accuracy vs real GPS ---- */
 /* Nearest point on the reference path → lap distance. Brute force over
@@ -142,8 +153,11 @@ const naive = (num, t, bySector) => {
 const probes = [0.15, 0.35, 0.55, 0.8].map((f) => tl.raceStart + f * (tl.raceEnd - tl.raceStart));
 /* Plus two probes inside every neutralisation, where behaviour differs. */
 for (const s of status) probes.push(s.from + (s.to - s.from) * 0.35, s.from + (s.to - s.from) * 0.7);
+/* A grid start after safety-car laps: on the grid, at the lights, away. */
+const startProbes = lateStart?.kind === "standing" ? [-25_000, -5000, 2500, 12_000].map((d) => tl.start.t + d) : [];
+probes.push(...startProbes);
 const errs = { warp: [], sector: [], lap: [] };
-const scErr = [], scSector = [];
+const scErr = [], scSector = [], startErr = [];
 const worst = [];
 for (const t of probes) {
   const raw = await get(`/location?session_key=${key}&date>${iso(t - 1500)}&date<${iso(t + 1500)}`);
@@ -162,6 +176,7 @@ for (const t of probes) {
     /* Compare at the sample's own timestamp. */
     const pc = tl.carAt(num, actual.t);
     const e = wrapDiff(pc.dist, a.dist);
+    if (startProbes.includes(t)) { startErr.push(e); continue; }
     (underSc ? scErr : errs.warp).push(e);
     const lap = driverLaps[num].find((l) => l.n === pc.lap);
     worst.push({
@@ -201,6 +216,7 @@ if (scErr.length) {
   console.log(`  under safety car (warp):          ${fmt(scErr)}`);
   console.log(`  under safety car (sector-linear): ${fmt(scSector)}`);
 }
+if (startErr.length) console.log(`  grid start after safety-car laps (parked → away): ${fmt(startErr)}`);
 
 /* Worst individual placements — where to look when a number above moves. */
 const toM = (v) => (lapM ? `${((v / ref.total) * lapM).toFixed(0)}m` : `${((v / ref.total) * 100).toFixed(1)}%`);

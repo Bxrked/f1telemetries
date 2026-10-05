@@ -334,6 +334,7 @@ const MOMENT: Record<string, { label: string; cls: string; rule: string }> = {
   sc: { label: "Safety car", cls: "text-sector-yellow", rule: "bg-sector-yellow" },
   vsc: { label: "Virtual safety car", cls: "text-sector-yellow", rule: "bg-sector-yellow" },
   penalty: { label: "Penalty", cls: "text-carbon-100", rule: "bg-carbon-400" },
+  start: { label: "Start", cls: "text-carbon-100", rule: "bg-carbon-400" },
 };
 
 /** The handful of notices that shaped the race; the full log on request. */
@@ -342,12 +343,21 @@ function KeyMoments({ messages }: { messages: any[] }) {
   /* Only what changed the race: a flag or safety car going out or coming
      in, and penalties actually handed down — not every "will be
      investigated" notice. */
-  const key = messages.filter((m) => {
-    const text = String(m.message ?? "").toUpperCase();
-    if (m.category === "red") return true;
-    if (m.category === "sc" || m.category === "vsc") return /DEPLOYED|IN THIS LAP|ENDING/.test(text);
-    if (m.category === "penalty") return /TIME PENALTY|DRIVE THROUGH|STOP.?(AND|\/)?.?GO|GRID PENALTY|DISQUALIF|REPRIMAND/.test(text);
-    return false;
+  /* A race begun behind the safety car is a key moment too: the laps
+     behind it, then race control's call for a standing or rolling start
+     (the same words announce a restart after a red flag — the red flag
+     itself is already listed then). */
+  let redSeen = false;
+  const key = messages.flatMap((m) => {
+    const text = String(m.message ?? "").toUpperCase().trim();
+    if (m.category === "red") {
+      redSeen = true;
+      return [m];
+    }
+    if (!redSeen && m.lap > 1 && m.lap <= 12 && /^(STANDING|ROLLING) START\b/.test(text)) return [{ ...m, category: "start" }];
+    if (m.category === "sc" || m.category === "vsc") return /DEPLOYED|IN THIS LAP|ENDING|BEHIND (THE )?SAFETY CAR/.test(text) ? [m] : [];
+    if (m.category === "penalty") return /TIME PENALTY|DRIVE THROUGH|STOP.?(AND|\/)?.?GO|GRID PENALTY|DISQUALIF|REPRIMAND/.test(text) ? [m] : [];
+    return [];
   });
   if (all) {
     return (

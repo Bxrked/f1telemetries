@@ -255,6 +255,89 @@ export function buildDriverLaps(rows) {
  * ================================================================ */
 
 const isVsc = (msg) => /\bVSC\b/.test(msg) || msg.includes("VIRTUAL SAFETY CAR");
+/* A red flag is usually a row with flag "RED" — but not always: Zandvoort
+   and Monza 2026 have only the text "RED FLAG - RACE SUSPENDED", with no
+   flag at all. Anchored, so a stewards' note that mentions a red flag
+   can't stop the race. */
+const isRedFlag = (r) => r.flag === "RED" || /^RED FLAG\b/.test(r.msg);
+
+/** How long after the lights the pole car reaches the line (1.9 s at Sepang 2026, from car speed data). */
+const LAUNCH_TO_LINE_MS = 1900;
+
+/**
+ * How the race got under way, when it WASN'T lights-out on lap 1.
+ *
+ * In the wet a race can start behind the safety car: the opening laps are
+ * run behind it and count as race laps (the official race time runs from
+ * there), then race control announces how the racing will begin —
+ *   "STANDING START": the field lines up on the grid again and the lights
+ *       go out at the start of the next lap (Sepang 2026: laps 1–2 behind
+ *       the safety car, lights out for lap 3, 6½ minutes in), or
+ *   "ROLLING START": racing begins when the leader next crosses the line
+ *       (Spa 2025: four laps, green for lap 5).
+ * Race control never says "SAFETY CAR DEPLOYED" for these laps, so
+ * without this the replay showed lights out at the first of them and two
+ * oddly slow "racing" laps.
+ *
+ * The same two messages also announce a restart after a red flag — that
+ * is not a start, so a red flag between the session starting and the
+ * message rules it out. (Lap timing can't tell: at Monaco 2024 the lap
+ * data itself begins at the restart, forty minutes after the red flag. A
+ * red flag BEFORE the session started is only a suspended start
+ * procedure, as at Spa 2025.)
+ *
+ * @param rcRows OpenF1 /race_control rows
+ * @param laps   buildDriverLaps() output
+ * @returns null for an ordinary start, else
+ *   { kind: "standing" | "rolling", behindSafetyCar: true, lap, t, announcedAt }
+ *   — `lap` is the first racing lap, `t` the moment racing begins (lights
+ *   out, or the leader at the line).
+ */
+export function detectStart(rcRows, laps) {
+  const startsByLap = {};
+  for (const list of Object.values(laps ?? {})) for (const l of list) (startsByLap[l.n] ??= []).push(l.start);
+  Object.values(startsByLap).forEach((s) => s.sort((a, b) => a - b));
+  const raceStart = startsByLap[1]?.[0];
+  if (raceStart == null) return null;
+  const field = startsByLap[1].length;
+
+  const rows = (rcRows ?? [])
+    .filter((r) => r.date)
+    .map((r) => ({ t: Date.parse(r.date), msg: (r.message ?? "").toUpperCase().trim(), flag: r.flag ?? null }))
+    .sort((a, b) => a.t - b.t);
+  const began = Math.min(raceStart, rows.find((r) => r.msg === "SESSION STARTED" || r.msg === "RACE START")?.t ?? raceStart);
+  let call = null;
+  for (const r of rows) {
+    if (r.t < began) continue;
+    if (r.t > raceStart + 45 * 60_000) break;
+    if (isRedFlag(r) || r.msg === "SESSION ABORTED") return null;
+    if (r.t > raceStart && /^(STANDING|ROLLING) START\b/.test(r.msg)) { call = r; break; }
+  }
+  if (!call) return null;
+  const kind = call.msg.startsWith("ROLLING") ? "rolling" : "standing";
+
+  /* The first racing lap: the first one most of the field begins after
+     the call (median, so a car already in the pit lane can't pull it
+     forward). */
+  const median = (s) => s[Math.floor(s.length / 2)];
+  const lap = Object.keys(startsByLap).map(Number).sort((a, b) => a - b).find((n) => n >= 2 && median(startsByLap[n]) > call.t);
+  if (!lap || lap > 12) return null;
+  const starts = startsByLap[lap];
+  const base = { kind, behindSafetyCar: true, lap, announcedAt: call.t };
+
+  if (kind === "rolling") return { ...base, t: starts[0] };
+
+  /* Off a grid the whole field crosses the line within a few seconds of
+     each other (5.5 s for 17 cars at Sepang); cars starting from the pit
+     lane crossed it long before. The pack's first crossing is the pole
+     car, just after the lights. No such pack → not a grid start we can
+     place, so say nothing. */
+  for (let i = 0; i < starts.length; i++) {
+    const inPack = starts.filter((s) => s >= starts[i] && s <= starts[i] + 10_000).length;
+    if (inPack >= Math.max(4, field / 2)) return { ...base, t: starts[i] - LAUNCH_TO_LINE_MS };
+  }
+  return null;
+}
 
 /**
  * Neutralisation periods from race control.
@@ -263,9 +346,20 @@ const isVsc = (msg) => /\bVSC\b/.test(msg) || msg.includes("VIRTUAL SAFETY CAR")
  * not the spelled-out form — matching only "VIRTUAL SAFETY CAR" misses
  * every VSC. A full safety car's "IN THIS LAP" is an announcement; the
  * race actually goes green when the leader next crosses the line, so the
- * period is closed there. A red flag holds until the next green.
+ * period is closed there. A red flag holds until the next green flag, or
+ * until the session is started again.
+ *
+ * A VSC can be upgraded: "SAFETY CAR DEPLOYED" arrives with no "VSC
+ * ENDING" before it. The VSC period ends there (`upgraded: true`) and a
+ * safety car period begins — ignoring the second deployment left the
+ * VSC running to the flag (Sepang 2026, laps 43–55), since only "VSC
+ * ENDING" could close it.
+ *
+ * @param start detectStart() output (with `scEnd` from the timeline), or
+ *   null. Laps behind the safety car before the start become a period of
+ *   their own (`start: true`), and nothing said before racing began is read.
  */
-export function buildTrackStatus(rcRows, leaderStarts, raceEnd) {
+export function buildTrackStatus(rcRows, leaderStarts, raceEnd, start = null) {
   const rows = (rcRows ?? [])
     .filter((r) => r.date)
     .map((r) => ({ t: Date.parse(r.date), msg: (r.message ?? "").toUpperCase(), flag: r.flag ?? null }))
@@ -277,24 +371,29 @@ export function buildTrackStatus(rcRows, leaderStarts, raceEnd) {
 
   const out = [];
   let open = null;
-  const close = (type, to) => {
+  const close = (type, to, extra) => {
     if (open && open.type === type) {
-      out.push({ ...open, to: Math.max(open.from, to) });
+      out.push({ ...open, ...extra, to: Math.max(open.from, to) });
       open = null;
     }
   };
+  const racingFrom = start?.behindSafetyCar ? start.t : null;
+  if (racingFrom != null) out.push({ type: "sc", from: leaderStarts[0], to: start.scEnd ?? start.t, start: true });
 
   for (const r of rows) {
-    if (r.flag === "RED") {
+    if (racingFrom != null && r.t < racingFrom) continue;
+    if (isRedFlag(r)) {
+      if (open?.type === "red") continue; // said twice: as a flag and as text
       if (open) close(open.type, r.t);
       open = { type: "red", from: r.t };
       continue;
     }
-    if (open?.type === "red" && r.flag === "GREEN") { close("red", r.t); continue; }
+    if (open?.type === "red" && (r.flag === "GREEN" || r.msg.trim() === "SESSION STARTED")) { close("red", r.t); continue; }
 
     if (r.msg.includes("SAFETY CAR") || /\bVSC\b/.test(r.msg)) {
       const vsc = isVsc(r.msg);
       if (r.msg.includes("DEPLOYED")) {
+        if (open?.type === "vsc" && !vsc) close("vsc", r.t, { upgraded: true });
         if (!open) open = { type: vsc ? "vsc" : "sc", from: r.t };
       } else if (vsc && r.msg.includes("ENDING")) {
         close("vsc", r.t);
@@ -319,10 +418,13 @@ export function buildTrackStatus(rcRows, leaderStarts, raceEnd) {
  * @param grid        {num: grid slot, 1 = pole}; 0/missing = back of the field
  * @param classification {num: {pos, millis}} official result — the order
  *                    and gaps once cars take the flag
+ * @param start       detectStart() output, or null for lights-out on lap 1
  */
-export function createTimeline({ reference, laps, finishers, pits, grid = {}, classification = {} }) {
+export function createTimeline({ reference, laps, finishers, pits, grid = {}, classification = {}, start = null }) {
   const ref = reference;
   const nums = Object.keys(laps).map(Number);
+  /* A grid start that isn't on lap 1: after laps behind the safety car. */
+  const late = start?.kind === "standing" && start.lap > 1 ? start : null;
 
   /* Per-driver lap-start index for binary search, and a median lap to
      close an open final lap. */
@@ -341,9 +443,15 @@ export function createTimeline({ reference, laps, finishers, pits, grid = {}, cl
       if (leaderStartByLap[l.n] == null || l.start < leaderStartByLap[l.n]) leaderStartByLap[l.n] = l.start;
     }
   }
+  /* The lap of a late grid start begins at the lights, as lap 1 does —
+     not when a car bound for the pit lane crossed the line a minute
+     earlier. */
+  if (late && leaderStartByLap[late.lap] != null) leaderStartByLap[late.lap] = late.t;
   const lapNumbers = Object.keys(leaderStartByLap).map(Number).sort((a, b) => a - b);
   const leaderStarts = lapNumbers.map((n) => leaderStartByLap[n]);
   const totalLaps = lapNumbers[lapNumbers.length - 1] ?? 0;
+  /* The official start — the race clock runs from here even when the
+     racing begins later (`start.t`). */
   const raceStart = leaderStarts[0] ?? 0;
 
   /* When each car's race is over. Finishers: end of their last lap.
@@ -373,20 +481,99 @@ export function createTimeline({ reference, laps, finishers, pits, grid = {}, cl
      line until the first sector splits pull them apart. */
   const fieldSize = nums.length;
   const slotOf = (num) => (grid[num] > 0 ? grid[num] : fieldSize);
-  const gridBack = (num) => (slotOf(num) - 1) * ref.total * 0.00145;
+  const slotLen = ref.total * 0.00145;
+  const gridBack = (num) => (slotOf(num) - 1) * slotLen;
 
-  /** Lap distance for a moment inside lap `l` of a car. */
-  function distInLap(num, l, t) {
-    const end = l.end ?? l.start + medianOf[num];
+  /**
+   * Lap distance for a moment inside lap `l` of a car. `from` / `to`
+   * replace the lap's own start and end when the car wasn't actually
+   * lapping for all of it (see the late grid start below).
+   */
+  function distInLap(num, l, t, from = l.start, to = l.end ?? l.start + medianOf[num]) {
     /* Warp sector-by-sector when both laps have splits; otherwise the
        whole lap onto the whole reference lap. */
-    const bySector = l.b1 != null && ref.sectorBounds.length === 4;
-    const tb = bySector ? [l.start, l.b1, l.b2, end] : [l.start, end];
+    const bySector = l.b1 != null && ref.sectorBounds.length === 4 && from < l.b1 && l.b2 < to;
+    const tb = bySector ? [from, l.b1, l.b2, to] : [from, to];
     const rb = bySector ? ref.sectorBounds : [0, ref.lapMs];
     let k = tb.length - 2;
     for (let i = 0; i < tb.length - 1; i++) if (t < tb[i + 1]) { k = i; break; }
     const f = clamp01((t - tb[k]) / (tb[k + 1] - tb[k] || 1));
     return refDistAt(ref, lerp(rb[k], rb[k + 1], f));
+  }
+
+  /* ---- A grid start after laps behind the safety car ----------------
+     The lap before it ends in a grid slot, not at the line: each car
+     drives round to its slot, waits, and leaves when the lights go out.
+     Lap timing doesn't say when it stopped (that lap has no third sector
+     — it ends at the line, after the launch), so the run to the slot is
+     paced from the car's own first two sectors.
+       back  — how far behind the line the car waits
+       park  — when it gets there
+       go    — when it leaves: the lights, or the pit exit opening
+     Measured against GPS at Sepang 2026 (17 cars on the grid):
+       - pole waits 33 m behind the timing line, the rest 8.3 m apart
+         behind it — hence the four extra slot lengths;
+       - behind the safety car and forming up, the third sector took 1.3x
+         what the first two would suggest (1.13–1.43).
+     With those, every car waiting on the grid is drawn within 7 m of
+     where it really was (median 4 m).
+     A car that pitted on that lap starts from the pit lane: it crossed
+     the line (in the lane) before the lights and is released once the
+     grid has gone. It is drawn at the line, where the lane is, but ranked
+     behind the last grid slot until then. */
+  const GRID_TO_LINE_SLOTS = 4;
+  const FORMING_UP_PACE = 1.3;
+  const lateOf = {};
+  let scEnd = null;
+  if (late) {
+    const sb = ref.sectorBounds;
+    const s3Share = sb.length === 4 ? ((sb[3] - sb[2]) / sb[2]) * FORMING_UP_PACE : null;
+    const fromPit = [];
+    let gridGone = late.t;
+    for (const num of nums) {
+      const prev = laps[num].find((l) => l.n === late.lap - 1);
+      const first = laps[num].find((l) => l.n === late.lap);
+      if (!prev) continue;
+      if (first && first.start < late.t - 1000) { fromPit.push({ num, first }); continue; }
+      const lineAt = prev.b2 != null && s3Share != null ? prev.b2 + (prev.b2 - prev.start) * s3Share : late.t - 20_000;
+      const park = Math.max(prev.start, Math.min(lineAt, late.t - 3000));
+      const cross = first?.start ?? prev.end ?? late.t;
+      lateOf[num] = { back: gridBack(num) + GRID_TO_LINE_SLOTS * slotLen, park, go: late.t, cross };
+      if (scEnd == null || park < scEnd) scEnd = park;
+      if (cross > gridGone) gridGone = cross;
+    }
+    fromPit
+      .sort((a, b) => a.first.start - b.first.start)
+      .forEach(({ num }, k) => {
+        const exit = (pitsOf[num] ?? []).find((p) => p.t > late.t && p.t - p.lane * 1000 < late.t)?.t;
+        lateOf[num] = { back: (fieldSize + GRID_TO_LINE_SLOTS + k) * slotLen, go: Math.max(gridGone, exit ?? 0), pit: true };
+      });
+  }
+  /** The car's place in the start procedure at t, or null once it is simply lapping. */
+  function lateStart(num, l, t) {
+    const s = lateOf[num];
+    if (!s) return null;
+    /* `rank` is the distance the running order uses, when that isn't
+       where the car is drawn (a car waiting in the pit lane). */
+    const at = (dist, onGrid, rank = dist) => ({ num, state: "racing", progress: l.n - 1 + rank / ref.total, lap: l.n, dist, inPit: inPitAt(num, t), onGrid });
+    const slot = ref.total - s.back;
+    if (s.pit) {
+      if (l.n === late.lap - 1) {
+        const end = l.end ?? l.start + medianOf[num];
+        if (t >= end) return at(0, true, -s.back + ref.total);
+        const dist = distInLap(num, l, t);
+        return at(dist, false, Math.min(dist, slot));
+      }
+      if (l.n !== late.lap) return null;
+      if (t < s.go) return at(0, true, -s.back);
+      return at(distInLap(num, l, t, s.go), false);
+    }
+    if (l.n !== late.lap - 1) return null;
+    if (t < s.park) return at(Math.min(slot, distInLap(num, l, t, l.start, s.park)), false);
+    if (t < s.go) return at(slot, true);
+    /* Away: from the slot to the line, gathering speed. */
+    const f = clamp01((t - s.go) / Math.max(1, s.cross - s.go));
+    return at(slot + s.back * f * f, false);
   }
 
   /**
@@ -416,6 +603,8 @@ export function createTimeline({ reference, laps, finishers, pits, grid = {}, cl
     }
     const i = floorIndex(startsOf[num], t);
     const l = ls[i];
+    const staged = late ? lateStart(num, l, t) : null;
+    if (staged) return staged;
     const end = l.end ?? l.start + medianOf[num];
     /* Between the end of one lap and the start of the next (red flag, or
        a hole in the data): hold at the line rather than extrapolate. */
@@ -502,7 +691,8 @@ export function createTimeline({ reference, laps, finishers, pits, grid = {}, cl
   function gaps(ordered, t) {
     const leader = ordered[0];
     const one = (car, other) => {
-      if (car.state === "grid" || car.state === "retired") return null;
+      /* Waiting for the lights: there is no gap to speak of yet. */
+      if (car.state === "grid" || car.onGrid || car.state === "retired") return null;
       if (car.state === "finished" && other.state === "finished") return officialGap(car, other);
       return timeBehind(other, car, t);
     };
@@ -527,7 +717,12 @@ export function createTimeline({ reference, laps, finishers, pits, grid = {}, cl
     return i < 0 ? 1 : Math.min(lapNumbers[i], totalLaps);
   }
 
-  return { carAt, snapshot, gaps, lapAt, nums, leaderStarts, lapNumbers, totalLaps, raceStart, raceEnd, doneAt };
+  /* When racing begins. `scEnd`: the laps behind the safety car are over
+     once the first car is in its grid slot (the safety car has gone by
+     then); for a rolling start they last until the green at the line. */
+  const began = start ? { ...start, scEnd: (late ? scEnd : null) ?? start.t } : { kind: "standing", behindSafetyCar: false, lap: 1, t: raceStart };
+
+  return { carAt, snapshot, gaps, lapAt, nums, leaderStarts, lapNumbers, totalLaps, raceStart, raceEnd, doneAt, start: began };
 }
 
 /* ================================================================

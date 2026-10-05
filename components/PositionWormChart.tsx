@@ -16,14 +16,30 @@ import { useForceVisible } from "./MotionProvider";
  * "DEPLOYED" opens a window; "ENDING" or "IN THIS LAP" closes it. Both
  * ends of the pair contain the words "SAFETY CAR", so matching on that
  * alone would treat every message as a start.
+ *
+ * Two cases the pairs don't cover (same rules as the replay's
+ * buildTrackStatus / detectStart):
+ *  - a VSC upgraded to a safety car: "SAFETY CAR DEPLOYED" with no "VSC
+ *    ENDING" before it. The VSC window ends there and an SC one begins.
+ *  - a race begun behind the safety car: nothing is "deployed"; the
+ *    laps run from lap 1 until race control calls "STANDING START" or
+ *    "ROLLING START" (on the last of them). After a red flag those same
+ *    words announce a restart, which is not this.
  */
 function neutralisations(messages: any[]) {
   const out: { from: number; to: number | null; kind: "sc" | "vsc" }[] = [];
   let open: { from: number; kind: "sc" | "vsc" } | null = null;
+  let quiet = true; // nothing deployed and no red flag yet
 
   for (const m of messages ?? []) {
     if (m?.kind !== "control" || typeof m.lap !== "number") continue;
-    const text = (m.message ?? "").toUpperCase();
+    const text = (m.message ?? "").toUpperCase().trim();
+    if (m.category === "red") quiet = false;
+    if (quiet && m.lap > 1 && m.lap <= 12 && /^(STANDING|ROLLING) START\b/.test(text)) {
+      out.push({ from: 1, to: m.lap, kind: "sc" });
+      quiet = false;
+      continue;
+    }
     /* Race control writes the abbreviation, not the words: real messages
        are "VSC DEPLOYED" / "VSC ENDING". Matching only the spelled-out
        form silently found nothing. */
@@ -32,6 +48,11 @@ function neutralisations(messages: any[]) {
     if (!isSc) continue;
 
     if (text.includes("DEPLOYED")) {
+      quiet = false;
+      if (open?.kind === "vsc" && !isVsc) {
+        out.push({ ...open, to: m.lap });
+        open = null;
+      }
       if (!open) open = { from: m.lap, kind: isVsc ? "vsc" : "sc" };
     } else if (open && (text.includes("ENDING") || text.includes("IN THIS LAP"))) {
       out.push({ ...open, to: m.lap });

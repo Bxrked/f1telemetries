@@ -39,7 +39,7 @@ const AWAY_MS = 260;
  * starts) and RaceReplay unmounts it — the drivers leave to their sides.
  * Any click or key skips straight to the start.
  */
-export function GridIntro({ data, front, onGo }: { data: any; front: [any, any]; onGo: () => void }) {
+export function GridIntro({ data, front, onGo, note }: { data: any; front: [any, any]; onGo: () => void; note?: string }) {
   const [lit, setLit] = useState(0);
   const [out, setOut] = useState(false);
 
@@ -116,6 +116,9 @@ export function GridIntro({ data, front, onGo }: { data: any; front: [any, any];
             {pole.code} · {second.code}
           </span>
         </p>
+        {/* A grid start that isn't lap 1 needs saying, or "Lap 3" on the
+            counter behind the lights looks like a mistake. */}
+        {note && <p className="timing mt-1.5 text-micro uppercase tracking-wider text-sector-yellow">{note}</p>}
         <p className="timing mt-6 text-micro uppercase tracking-wider text-carbon-500">Click or press any key to skip</p>
       </motion.div>
 

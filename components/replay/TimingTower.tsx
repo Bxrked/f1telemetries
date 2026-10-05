@@ -86,7 +86,7 @@ export default function TimingTower({
             if (out) readout = <span className="text-f1red-bright">OUT</span>;
             else if (c.inPit) readout = <span className="text-sector-yellow">PIT</span>;
             else if (i === 0) readout = <span className="text-carbon-300">{fin ? "FIN" : "Leader"}</span>;
-            else if (c.state === "grid") readout = <span className="text-carbon-500">P{i + 1}</span>;
+            else if (c.state === "grid" || c.onGrid) readout = <span className="text-carbon-500">P{i + 1}</span>;
             else if (mode === "gap" && g?.lapsDown >= 1) readout = <span className="text-carbon-400">+{g.lapsDown} lap{g.lapsDown > 1 ? "s" : ""}</span>;
             else if (mode === "interval" && g?.lapsToAhead >= 1) readout = <span className="text-carbon-400">+{g.lapsToAhead} lap{g.lapsToAhead > 1 ? "s" : ""}</span>;
             else readout = fmtGap(mode === "gap" ? g?.gap : g?.interval);

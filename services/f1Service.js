@@ -17,7 +17,7 @@ import { fiaRaceSlug, fiaTranscriptUrl } from "./fiaTranscript";
 import { buildTeammateBattles, mergeRaces } from "./teammates";
 import { unpublishedRace, buildBridgedRace, gridFromPositions } from "./raceBridge";
 import {
-  buildReference, buildDriverLaps, createTimeline, buildTrackStatus, detectOvertakes, isPenalty,
+  buildReference, buildDriverLaps, createTimeline, buildTrackStatus, detectStart, detectOvertakes, isPenalty,
 } from "./replayModel";
 
 /* ================================================================
@@ -1579,8 +1579,12 @@ export async function getReplayTimeline() {
 
       const grid = Object.fromEntries(Object.entries(results).map(([n, r]) => [n, r.grid]));
       const classification = Object.fromEntries(Object.entries(results).map(([n, r]) => [n, { pos: r.finish, millis: r.millis }]));
-      const timeline = createTimeline({ reference, laps: driverLaps, finishers, pits, grid, classification });
-      const status = buildTrackStatus(rc, timeline.leaderStarts, timeline.raceEnd);
+      /* Usually lights-out on lap 1; null unless the race began behind the
+         safety car (then `start.t` is when the racing really started). */
+      const lateStart = detectStart(rc, driverLaps);
+      const timeline = createTimeline({ reference, laps: driverLaps, finishers, pits, grid, classification, start: lateStart });
+      const start = timeline.start;
+      const status = buildTrackStatus(rc, timeline.leaderStarts, timeline.raceEnd, lateStart ? start : null);
 
       const stints = {};
       (Array.isArray(stintRows) ? stintRows : []).forEach((s) => {
@@ -1595,18 +1599,23 @@ export async function getReplayTimeline() {
       /* ---- Events ---- */
       const code = (n) => drivers[n]?.code ?? String(n);
       const ev = (t, type, label, nums = []) => ({ t, lap: timeline.lapAt(t), type, label, nums });
-      const events = [ev(timeline.raceStart, "start", "Lights out")];
+      const events = [ev(start.t, "start", start.kind === "rolling" ? "Rolling start" : "Lights out")];
 
+      /* Racing begins at `start.t`: places changing behind the safety car
+         before it are the queue forming up, not overtakes. */
       const pitTimes = {};
       pits.forEach((p) => (pitTimes[p.num] ??= []).push(p.t));
-      detectOvertakes(positions, { raceStart: timeline.raceStart, pitTimes, excludeDuring: status }).forEach((o) =>
+      detectOvertakes(positions, { raceStart: start.t, pitTimes, excludeDuring: status }).forEach((o) =>
         events.push(ev(o.t, "overtake", `${code(o.nums[0])} passes ${code(o.nums[1])} for P${o.pos}`, o.nums))
       );
 
       const STATUS_LABEL = { sc: "Safety Car", vsc: "Virtual Safety Car", red: "Red flag" };
       status.forEach((s) => {
+        /* The opening laps behind the safety car end with the start
+           itself; a VSC upgraded to a safety car didn't end, it changed. */
+        if (s.start) return events.push(ev(s.from, "sc", "Race starts behind the Safety Car"));
         events.push(ev(s.from, s.type, `${STATUS_LABEL[s.type]} deployed`));
-        if (s.to < timeline.raceEnd) {
+        if (s.to < timeline.raceEnd && !s.upgraded) {
           events.push(ev(s.to, `${s.type}-end`, s.type === "red" ? "Session resumes" : `${STATUS_LABEL[s.type]} ends`));
         }
       });
@@ -1618,17 +1627,18 @@ export async function getReplayTimeline() {
         );
       });
 
-      /* Fastest lap: each time the overall best improves, from lap 5 on
-         (before that every lap is a "fastest lap" as fuel burns off). */
+      /* Fastest lap: each time the overall best improves, from the fifth
+         racing lap on (before that every lap is a "fastest lap" as fuel
+         burns off). */
       const timed = laps
-        .filter((l) => l.date_start && l.lap_duration > 0 && !l.is_pit_out_lap && l.lap_number > 1)
+        .filter((l) => l.date_start && l.lap_duration > 0 && !l.is_pit_out_lap && l.lap_number > start.lap)
         .map((l) => ({ num: l.driver_number, n: l.lap_number, d: l.lap_duration, end: Date.parse(l.date_start) + l.lap_duration * 1000 }))
         .sort((a, b) => a.end - b.end);
       let bestLap = Infinity;
       timed.forEach((l) => {
         if (l.d >= bestLap) return;
         bestLap = l.d;
-        if (l.n >= 5) events.push(ev(l.end, "fastest", `${code(l.num)} fastest lap · ${formatLapTime(l.d)}`, [l.num]));
+        if (l.n >= start.lap + 4) events.push(ev(l.end, "fastest", `${code(l.num)} fastest lap · ${formatLapTime(l.d)}`, [l.num]));
       });
 
       timeline.nums
@@ -1685,6 +1695,9 @@ export async function getReplayTimeline() {
         drivers,
         results,
         timeline,
+        /* { kind: "standing" | "rolling", behindSafetyCar, lap, t } — when
+           the racing began; lap 1 and the race start for an ordinary race. */
+        start,
         reference,
         status,
         events,
@@ -1748,7 +1761,9 @@ async function lapAtBuilder(sessionKey) {
 function controlCategory(row) {
   const msg = (row.message ?? "").toUpperCase();
   const flag = (row.flag ?? "").toUpperCase();
-  if (flag === "RED") return "red";
+  /* Usually a row flagged RED; some 2026 races carry only the text
+     "RED FLAG - RACE SUSPENDED" with no flag. */
+  if (flag === "RED" || /^RED FLAG\b/.test(msg.trim())) return "red";
   /* Race control writes "VSC DEPLOYED", not "VIRTUAL SAFETY CAR" — matching
      only the spelled-out form mislabelled every VSC message as generic. */
   if (msg.includes("VIRTUAL SAFETY CAR") || /\bVSC\b/.test(msg)) return "vsc";

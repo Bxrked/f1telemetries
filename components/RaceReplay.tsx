@@ -120,8 +120,9 @@ export default function RaceReplay() {
   }, [data]);
   /* The start sequence needs motion and a front row. Without either the
      race still has to begin: a beat on the grid, then go. (Gating only
-     on reduced motion left a replay with no front row waiting forever.) */
-  const showIntro = intro === "lights" && !!frontRow && !reducedMotion && !forceVisible;
+     on reduced motion left a replay with no front row waiting forever.)
+     A rolling start has no lights to show, so it gets the beat too. */
+  const showIntro = intro === "lights" && !!frontRow && !reducedMotion && !forceVisible && data?.start?.kind !== "rolling";
   useEffect(() => {
     if (intro !== "lights" || showIntro) return;
     const timer = setTimeout(startRace, 900);
@@ -175,7 +176,10 @@ export default function RaceReplay() {
         if (!d || !o?.transform) return setFailed(true);
         setData(d);
         setOutline(o);
-        const t0 = d.timeline.raceStart - 3000;
+        /* Open where the racing begins. Usually that is the race start;
+           after laps behind the safety car it is the grid start that
+           followed, with those laps still on the timeline behind it. */
+        const t0 = (d.start?.t ?? d.timeline.raceStart) - 3000;
         clockRef.current = { t: t0, speed: 10, playing: false };
         setUi({ t: t0, speed: 10, playing: false });
         gpsRef.current = createGpsBuffer({
@@ -196,6 +200,8 @@ export default function RaceReplay() {
   const tl = data?.timeline;
   const tMin = tl ? tl.raceStart - 3000 : 0;
   const tMax = tl ? tl.raceEnd + 5000 : 0;
+  /* Where "from the start" means: the lights, not laps behind a safety car. */
+  const tOpen = tl ? (data.start?.t ?? tl.raceStart) - 3000 : 0;
   const lowerTypes = useMemo(() => (data ? data.events.filter((e: any) => LOWER_THIRD_TYPES.has(e.type)) : []), [data]);
   const lowerTimes = useMemo(() => lowerTypes.map((e: any) => e.t), [lowerTypes]);
   const clips: RadioClip[] = useMemo(() => data?.radio ?? [], [data]);
@@ -275,10 +281,10 @@ export default function RaceReplay() {
   );
   const togglePlay = useCallback(() => {
     const c = clockRef.current;
-    if (!c.playing && c.t >= tMax) c.t = tMin;
+    if (!c.playing && c.t >= tMax) c.t = tOpen;
     c.playing = !c.playing;
     sync();
-  }, [tMin, tMax]);
+  }, [tOpen, tMax]);
   const setSpeed = useCallback((s: number) => {
     clockRef.current.speed = s;
     sync();
@@ -427,7 +433,7 @@ export default function RaceReplay() {
     const sec = (v: number | null | undefined) => (v == null ? "—" : `+${v.toFixed(v >= 100 ? 0 : 1)}s`);
     const laps = (n: number) => `+${n} lap${n > 1 ? "s" : ""}`;
     const out = focusCar.state === "retired";
-    const waiting = focusCar.state === "grid";
+    const waiting = focusCar.state === "grid" || !!focusCar.onGrid;
     card = {
       position: out ? "Out" : focusCar.state === "finished" ? `Finished P${focusIdx + 1}` : `P${focusIdx + 1}`,
       ahead: out || waiting ? "—" : focusIdx === 0 ? "Leading" : g?.lapsToAhead >= 1 ? laps(g.lapsToAhead) : sec(g?.interval),
@@ -664,7 +670,7 @@ export default function RaceReplay() {
                   document.getElementById("replay-side")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
                 }}
                 onAgain={() => {
-                  seek(tMin);
+                  seek(tOpen);
                   clockRef.current.speed = 10;
                   clockRef.current.playing = true;
                   sync();
@@ -811,7 +817,19 @@ export default function RaceReplay() {
 
       {/* ── The start: front row and the lights ──────────────────────── */}
       <AnimatePresence>
-        {showIntro && frontRow && <GridIntro key="grid" data={data} front={frontRow} onGo={startRace} />}
+        {showIntro && frontRow && (
+          <GridIntro
+            key="grid"
+            data={data}
+            front={frontRow}
+            onGo={startRace}
+            note={
+              data.start?.behindSafetyCar
+                ? `Lap ${data.start.lap} · after ${data.start.lap - 1} lap${data.start.lap > 2 ? "s" : ""} behind the safety car`
+                : undefined
+            }
+          />
+        )}
       </AnimatePresence>
     </div>
   );
