@@ -2009,7 +2009,9 @@ export async function getPostRaceInterviews() {
   const slug = fiaRaceSlug(race.raceName);
   const source = fiaTranscriptUrl(race.season, slug);
   try {
-    return await fetchJson(`/api/interviews?year=${race.season}&race=${slug}`, { ttl: 30 * 60 * 1000, timeout: 20_000 });
+    /* revalidate: a browser that stored "not published" before the FIA
+       posted the transcript must ask again, not replay that answer. */
+    return await fetchJson(`/api/interviews?year=${race.season}&race=${slug}`, { ttl: 30 * 60 * 1000, timeout: 20_000, revalidate: true });
   } catch (err) {
     return { status: /HTTP 404/.test(err?.message ?? "") ? "not-published" : "unreachable", source };
   }

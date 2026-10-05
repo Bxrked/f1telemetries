@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { parseFiaTranscript, fiaTranscriptUrl, fiaRaceSlug } from "@/services/fiaTranscript";
+import { parseFiaTranscript, fiaTranscriptUrls, fiaRaceSlug } from "@/services/fiaTranscript";
 
 /**
  * GET /api/interviews?year=2026&race=azerbaijan
@@ -13,9 +13,13 @@ import { parseFiaTranscript, fiaTranscriptUrl, fiaRaceSlug } from "@/services/fi
  * otherwise anyone could loop made-up slugs and use this route to hammer
  * fia.com (each unknown slug is a fresh upstream request).
  *
+ * `race` is fiaRaceSlug(raceName). Most names give one FIA address; a name
+ * that isn't "<Place> Grand Prix" ("Bahrain Grand Prix in Malaysia") gives
+ * two candidates, tried in order — see fiaTranscriptUrls.
+ *
  * Cached 30 min. The transcript appears a few hours after the flag; a
  * shorter cache means it shows up soon after, a longer one hits fia.com
- * less. At 30 min that's ≤ 48 requests per race per day, whatever the
+ * less. At 30 min that's ≤ 48 requests per address per day, whatever the
  * site's traffic.
  */
 const REVALIDATE_S = 1800;
@@ -53,25 +57,34 @@ export async function GET(req: Request) {
   if (!slugs) return NextResponse.json({ status: "unreachable" }, { status: 502 });
   if (!slugs.has(race)) return NextResponse.json({ status: "unknown-race" }, { status: 404 });
 
-  const source = fiaTranscriptUrl(year, race);
-  let html: string;
-  try {
-    const res = await fetch(source, {
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; F1Telemetries/1.0; +https://f1telemetries.com)" },
-      next: { revalidate: REVALIDATE_S },
-    });
-    if (!res.ok) throw new Error(`fia.com ${res.status}`);
-    html = await res.text();
-  } catch {
-    return NextResponse.json({ status: "unreachable", source }, { status: 502 });
-  }
-
-  /* fia.com answers unknown URLs with its news index (200), so "not
-     published yet" is a parse that finds no transcript, not a 404. */
-  const transcript = parseFiaTranscript(html);
+  /* One address for an ordinary race name, two for an unusual one. */
+  const sources = fiaTranscriptUrls(year, race);
   const cache = { "Cache-Control": `public, s-maxage=${REVALIDATE_S}, stale-while-revalidate=86400` };
-  if (!transcript) {
-    return NextResponse.json({ status: "not-published", source }, { status: 404, headers: cache });
+  /* "Not published" must not outlive the wait. With stale-while-revalidate
+     a browser replayed its stored 404 on the first visit AFTER the FIA had
+     published (and only fetched the transcript behind it), so the tab still
+     said "not published yet". A CDN may hold it for the 30 min; a browser
+     asks every time. */
+  const waiting = { "Cache-Control": `public, max-age=0, s-maxage=${REVALIDATE_S}, must-revalidate` };
+  let reached = false;
+  for (const source of sources) {
+    let html: string;
+    try {
+      const res = await fetch(source, {
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; F1Telemetries/1.0; +https://f1telemetries.com)" },
+        next: { revalidate: REVALIDATE_S },
+      });
+      if (!res.ok) throw new Error(`fia.com ${res.status}`);
+      html = await res.text();
+    } catch {
+      continue;
+    }
+    reached = true;
+    /* fia.com answers unknown URLs with its news index (200), so "not
+       published yet" is a parse that finds no transcript, not a 404. */
+    const transcript = parseFiaTranscript(html);
+    if (transcript) return NextResponse.json({ status: "ok", source, ...transcript }, { headers: cache });
   }
-  return NextResponse.json({ status: "ok", source, ...transcript }, { headers: cache });
+  if (!reached) return NextResponse.json({ status: "unreachable", source: sources[0] }, { status: 502 });
+  return NextResponse.json({ status: "not-published", source: sources[0] }, { status: 404, headers: waiting });
 }

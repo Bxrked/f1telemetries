@@ -13,7 +13,7 @@
  */
 
 import { writeFileSync } from "node:fs";
-import { parseFiaTranscript, fiaRaceSlug, fiaTranscriptUrl } from "./services/fiaTranscript.js";
+import { parseFiaTranscript, fiaRaceSlug, fiaTranscriptUrls } from "./services/fiaTranscript.js";
 
 let [year, slug] = process.argv.slice(2);
 if (!year) {
@@ -24,15 +24,24 @@ if (!year) {
   console.log(`latest race: ${race.raceName} (${year}) → slug "${slug}"`);
 }
 
-const url = fiaTranscriptUrl(year, slug);
-const res = await fetch(url, { headers: { "User-Agent": "F1Telemetries diagnostics" } });
-const html = await res.text();
-writeFileSync("/tmp/fia-transcript.html", html);
-console.log(`${url}\n→ HTTP ${res.status}, ${(html.length / 1024).toFixed(0)} KB (saved to /tmp/fia-transcript.html)`);
-
-const t = parseFiaTranscript(html);
+/* The same addresses, in the same order, as the API route tries. */
+let t = null;
+let html = "";
+for (const url of fiaTranscriptUrls(year, slug)) {
+  const res = await fetch(url, { headers: { "User-Agent": "F1Telemetries diagnostics" } });
+  html = await res.text();
+  writeFileSync("/tmp/fia-transcript.html", html);
+  console.log(`${url}\n→ HTTP ${res.status}, ${(html.length / 1024).toFixed(0)} KB (saved to /tmp/fia-transcript.html)`);
+  t = parseFiaTranscript(html);
+  if (t) break;
+  console.log("  no transcript at this address");
+}
 if (!t) {
+  /* The news index the FIA served instead lists what it HAS published —
+     if this race is in it, the address rule is what's wrong. */
+  const listed = [...new Set(html.match(/\/news\/f1-\d{4}-[a-z0-9-]*post-race-press-conference-transcript/g) ?? [])];
   console.log("\nPARSE FAILED — either not published yet (the FIA serves its news index for unknown URLs) or the layout changed.");
+  if (listed.length) console.log(`Post-race transcripts on the FIA's news index right now:\n  ${listed.join("\n  ")}`);
   process.exit(1);
 }
 

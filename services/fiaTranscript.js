@@ -174,7 +174,12 @@ export function parseFiaTranscript(html) {
   return { title, date, drivers, sections };
 }
 
-/** "São Paulo Grand Prix" → "sao-paulo" (the FIA's URL slug for the race). */
+/**
+ * The race's id in /api/interviews: "São Paulo Grand Prix" → "sao-paulo".
+ * A name that doesn't END in "Grand Prix" keeps the words ("Bahrain Grand
+ * Prix in Malaysia" → "bahrain-grand-prix-in-malaysia"); fiaTranscriptUrls
+ * turns either kind into the FIA's address.
+ */
 export function fiaRaceSlug(raceName) {
   return raceName
     .replace(/\s*Grand Prix\s*$/i, "")
@@ -185,5 +190,29 @@ export function fiaRaceSlug(raceName) {
     .replace(/^-|-$/g, "");
 }
 
-export const fiaTranscriptUrl = (year, slug) =>
-  `https://www.fia.com/news/f1-${year}-${slug}-grand-prix-post-race-press-conference-transcript`;
+const FIA_NEWS = "https://www.fia.com/news";
+const TRANSCRIPT_TAIL = "post-race-press-conference-transcript";
+/* fia.com is Drupal, and its addresses are made from the page title with
+   Drupal's standard list of small words left out — "…Grand Prix in
+   Malaysia…" is published at "…-grand-prix-malaysia-…". */
+const DROPPED_WORDS = new Set(
+  "a an as at before but by for from is in into like of off on onto per since than the this that to up via with".split(" ")
+);
+
+/**
+ * The addresses a race's transcript can be at, most likely first.
+ *   "azerbaijan"                     → f1-2026-azerbaijan-grand-prix-post-race-…
+ *   "bahrain-grand-prix-in-malaysia" → f1-2026-bahrain-grand-prix-malaysia-post-race-…     (where the FIA put it)
+ *                                      f1-2026-bahrain-grand-prix-in-malaysia-post-race-…  (in case it keeps the word next time)
+ * A name with "Grand Prix" in the middle is already the whole title, so
+ * nothing is appended to it — appending is what sent that race to an
+ * address that doesn't exist. Ordinary names give one address, as before.
+ */
+export function fiaTranscriptUrls(year, slug) {
+  const stem = /(^|-)grand-prix(-|$)/.test(slug) ? slug : `${slug}-grand-prix`;
+  const short = stem.split("-").filter((w) => !DROPPED_WORDS.has(w)).join("-");
+  return [...new Set([short, stem])].map((s) => `${FIA_NEWS}/f1-${year}-${s}-${TRANSCRIPT_TAIL}`);
+}
+
+/** The address to link to when there is no transcript to show. */
+export const fiaTranscriptUrl = (year, slug) => fiaTranscriptUrls(year, slug)[0];

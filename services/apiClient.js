@@ -140,7 +140,7 @@ function lsSet(url, expires, data) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function doFetch(url, ttl, timeout, store) {
+async function doFetch(url, ttl, timeout, store, revalidate) {
   const host = hostOf(url);
   const MAX_ATTEMPTS = 4;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -152,7 +152,7 @@ async function doFetch(url, ttl, timeout, store) {
        concurrency slot. `backoffMs` carries the retry decision out. */
     let backoffMs = 0;
     try {
-      const res = await fetch(url, { signal: controller.signal });
+      const res = await fetch(url, revalidate ? { signal: controller.signal, cache: "no-cache" } : { signal: controller.signal });
       if (!res.ok) {
         const retryable = res.status === 429 || res.status >= 500;
         if (retryable && attempt < MAX_ATTEMPTS) {
@@ -190,8 +190,13 @@ async function doFetch(url, ttl, timeout, store) {
  * `store: false` skips both cache tiers (still rate-limited and deduped).
  * For bulk streams the caller manages itself — replay GPS is ~1 MB per
  * lap, and caching a whole race here would pin ~60 MB in memory.
+ *
+ * `revalidate: true` makes the browser check with the server instead of
+ * replaying an answer from its own HTTP cache. For an answer that is
+ * expected to change ("not published yet"): this module never keeps a
+ * failed response, but the browser can.
  */
-export async function fetchJson(url, { ttl = 60_000, timeout = 10_000, store = true } = {}) {
+export async function fetchJson(url, { ttl = 60_000, timeout = 10_000, store = true, revalidate = false } = {}) {
   const hit = memory.get(url);
   if (hit && hit.expires > Date.now()) return hit.data;
 
@@ -202,7 +207,7 @@ export async function fetchJson(url, { ttl = 60_000, timeout = 10_000, store = t
   }
 
   if (inflight.has(url)) return inflight.get(url);
-  const p = doFetch(url, ttl, timeout, store).finally(() => inflight.delete(url));
+  const p = doFetch(url, ttl, timeout, store, revalidate).finally(() => inflight.delete(url));
   inflight.set(url, p);
   return p;
 }
