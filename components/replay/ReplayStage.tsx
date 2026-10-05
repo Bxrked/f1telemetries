@@ -9,10 +9,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { RotateCcw, X, ChevronsRight, Square } from "lucide-react";
+import { RotateCcw, X, ChevronsRight, Square, Timer } from "lucide-react";
 import { EASE } from "@/lib/motion";
 import { COMPOUND } from "@/lib/chartTheme";
-import DriverSide, { Helmet } from "../DriverCutout";
+import DriverSide, { Helmet, isLight } from "../DriverCutout";
 import PodiumDriver from "../PodiumDriver";
 import { EVENT_COLOR } from "./ReplayTimeline";
 import { Face } from "../TelemetryExhibits";
@@ -272,10 +272,8 @@ const MOMENT_LABEL: Record<string, string> = {
  * A notable event, said the way the rest of the site says things: small
  * mono label, big italic line, a rule in the driver's team colour.
  */
-export function Moment({ event, color, driver, compact = false }: { event: any; color?: string; driver?: any; compact?: boolean }) {
+export function Moment({ event, color, compact = false }: { event: any; color?: string; compact?: boolean }) {
   const c = color ?? EVENT_COLOR[event.type] ?? "#E7EAF0";
-  /* A fastest lap gets the timing-screen treatment instead of a headline. */
-  if (event.type === "fastest" && event.time && driver?.code) return <FastestLapCall event={event} driver={driver} compact={compact} />;
   return (
     <motion.div
       /* Centred with auto margins. A -translate-x-1/2 class is wiped by
@@ -314,79 +312,93 @@ export function Moment({ event, color, driver, compact = false }: { event: any; 
 
 /* ---- Fastest lap and team radio: the two broadcast graphics -------------- */
 
-/**
- * Fastest lap, the way a race broadcast calls it: a purple slab, who, and
- * the time in timing-screen purple. Same slot and lifetime as a Moment.
- * Everything that moves is a transform — the slab wipes with scaleX, the
- * name and the time rise out of their masks.
- */
-export function FastestLapCall({ event, driver, compact = false }: { event: any; driver: any; compact?: boolean }) {
+/* Both are lower thirds in the manner of the race broadcast: a coloured
+   title strip over a dark row. They sit in the bottom corners of the map
+   (RaceReplay places them) — fastest lap left, radio right — and are
+   short-lived, unlike the driver card that used to hide cars there.
+   Full size from xl; a step smaller below, where the map is narrow.
+   Everything that moves is a transform or opacity. */
+
+/* The timing-screen purple, deepened so white type on it reads (the raw
+   token is 3.9:1 against white; this is 5:1). */
+const CALL_PURPLE = "color-mix(in srgb, #B44CFF 78%, #16002A)";
+const surname = (d: any) => d?.familyName ?? d?.name?.split(" ").slice(-1)[0] ?? d?.code ?? "";
+const rise = (delay: number) => ({
+  initial: { y: "105%" },
+  animate: { y: "0%", transition: { duration: 0.45, ease: EASE.out, delay } },
+});
+
+/** Fastest lap: purple title strip with the stopwatch, then who and the time. */
+export function FastestLapCall({ event, driver }: { event: any; driver: any }) {
   const team = driver.teamColor ?? "#8B95A7";
-  const rise = (delay: number) => ({
-    initial: { y: "105%" },
-    animate: { y: "0%", transition: { duration: 0.45, ease: EASE.out, delay } },
-  });
   return (
     <motion.div
       role="status"
       aria-label={`Lap ${event.lap}: fastest lap, ${driver.name ?? driver.code}, ${event.time}`}
-      /* Centred with auto margins, like Moment: the x animation owns `transform`. */
-      className={`pointer-events-none absolute inset-x-0 z-10 mx-auto flex w-max max-w-full items-stretch overflow-hidden bg-carbon-900/95 shadow-panel ${compact ? "top-2 h-10" : "top-3 h-11"}`}
-      initial={{ opacity: 0, x: -18 }}
+      className="pointer-events-none w-full min-w-0 max-w-[24rem] xl:max-w-[28rem] overflow-hidden bg-carbon-900/95 shadow-panel"
+      initial={{ opacity: 0, x: -36 }}
       animate={{ opacity: 1, x: 0, transition: { duration: 0.4, ease: EASE.out } }}
-      exit={{ opacity: 0, x: 14, transition: { duration: 0.25, ease: EASE.in } }}
+      exit={{ opacity: 0, x: -28, transition: { duration: 0.28, ease: EASE.in } }}
     >
-      <span className="relative flex items-center px-3" aria-hidden>
+      <div className="relative flex h-7 items-center gap-2 px-3 xl:h-8" aria-hidden>
         <motion.span
-          className="absolute inset-0 origin-left bg-sector-purple"
+          className="absolute inset-0 origin-left"
+          style={{ background: CALL_PURPLE }}
           initial={{ scaleX: 0 }}
-          animate={{ scaleX: 1, transition: { duration: 0.35, ease: EASE.out, delay: 0.05 } }}
+          animate={{ scaleX: 1, transition: { duration: 0.4, ease: EASE.out, delay: 0.05 } }}
         />
-        <span className="timing relative text-micro font-bold uppercase leading-[1.2] tracking-[0.16em] text-carbon-950">
-          Fastest
-          <br />
-          lap
+        <motion.span
+          className="relative flex min-w-0 flex-1 items-center gap-2 text-white"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1, transition: { duration: 0.25, delay: 0.25 } }}
+        >
+          <Timer size={16} strokeWidth={2.5} className="shrink-0" />
+          <span className="font-display text-sm font-black uppercase italic leading-none tracking-wide xl:text-base">Fastest lap</span>
+          <span className="timing ml-auto text-micro font-bold uppercase tracking-[0.18em] text-white/80">Lap {event.lap}</span>
+        </motion.span>
+      </div>
+      <div className="flex h-14 items-stretch xl:h-16" aria-hidden>
+        <span className="w-1 shrink-0" style={{ background: team }} />
+        <span className="flex min-w-0 flex-1 items-center gap-3 pl-3 pr-2">
+          <Face src={driver.thumb} color={team} size={44} />
+          <span className="min-w-0">
+            <span className="timing block truncate text-micro uppercase tracking-[0.16em] text-carbon-300">
+              {driver.givenName ?? driver.teamName}
+            </span>
+            <span className="block overflow-hidden pr-[0.12em]">
+              <motion.span className="block truncate font-display text-xl font-black uppercase italic leading-none tracking-tight text-carbon-100 xl:text-2xl" {...rise(0.2)}>
+                {surname(driver)}
+              </motion.span>
+            </span>
+          </span>
         </span>
-      </span>
-      <span className="w-[3px] shrink-0" style={{ background: team }} aria-hidden />
-      <span className="flex items-center gap-2.5 pl-2.5 pr-3" aria-hidden>
-        <Face src={driver.thumb} color={team} size={compact ? 26 : 28} />
-        <span className="overflow-hidden pr-[0.12em]">
-          <motion.span className="block font-display text-xl font-black uppercase italic leading-none tracking-tight text-carbon-100" {...rise(0.18)}>
-            {driver.code}
-          </motion.span>
+        <span className="flex shrink-0 items-center pl-2 pr-4">
+          <span className="block overflow-hidden">
+            <motion.span className="timing block text-2xl font-bold leading-none text-sector-purple xl:text-3xl" {...rise(0.3)}>
+              {event.time}
+            </motion.span>
+          </span>
         </span>
-      </span>
-      <span className="flex items-center border-l border-carbon-700 px-3" aria-hidden>
-        <span className="overflow-hidden">
-          <motion.span className="timing block text-lg font-bold leading-none text-sector-purple" {...rise(0.28)}>
-            {event.time}
-          </motion.span>
-        </span>
-      </span>
-      <span className="hidden items-center pr-3 xl:flex" aria-hidden>
-        <span className="eyebrow whitespace-nowrap">Lap {event.lap}</span>
-      </span>
+      </div>
     </motion.div>
   );
 }
 
-/* Resting heights of the waveform's bars (% of the row), and how each
-   one breathes. Fixed numbers, so it looks the same on every render. */
-const WAVE = [38, 62, 84, 52, 96, 70, 44, 88, 58, 100, 66, 40, 78, 54, 90, 48, 72, 36];
+/* Resting heights of the waveform's bars (% of the row). Fixed numbers,
+   so it looks the same on every render; the row clips what doesn't fit. */
+const WAVE = [34, 58, 82, 50, 96, 68, 42, 88, 56, 100, 64, 38, 76, 52, 90, 46, 72, 36, 84, 60, 94, 44, 70, 54, 98, 40, 80, 62, 48, 86, 58, 74, 36, 92, 66, 50, 78, 42, 88, 56];
 
 /** "Someone is talking" — not a level meter: the audio comes from another origin and can't be measured. */
 function Waveform({ color }: { color: string }) {
   return (
-    <span className="flex h-6 items-center gap-[2px]" aria-hidden>
+    <span className="flex h-8 min-w-0 flex-1 items-center gap-[3px] overflow-hidden" aria-hidden>
       {WAVE.map((h, i) => (
         <motion.span
           key={i}
-          /* Phones get the first eight bars: the whole row doesn't fit beside the name. */
-          className={`w-[2px] origin-center ${i >= 8 ? "hidden sm:block" : ""}`}
+          className="w-[3px] shrink-0 origin-center"
           style={{ height: `${h}%`, background: color }}
-          animate={{ scaleY: [0.35, 1, 0.55, 0.9, 0.35] }}
-          transition={{ duration: 0.7 + (i % 5) * 0.11, repeat: Infinity, ease: "easeInOut", delay: (i * 0.07) % 0.6 }}
+          animate={{ scaleY: [0.3, 1, 0.5, 0.9, 0.3] }}
+          transition={{ duration: 0.65 + (i % 5) * 0.11, repeat: Infinity, ease: "easeInOut", delay: (i * 0.07) % 0.6 }}
         />
       ))}
     </span>
@@ -394,14 +406,16 @@ function Waveform({ color }: { color: string }) {
 }
 
 /**
- * Team radio, on air: whose voice it is, a waveform while it plays, and
- * a line along the foot for how far through the clip is. There is no
- * transcript to show — OpenF1 has audio only, and words are never invented.
- * `progress` is read every frame and written straight to the bar (per-frame
- * values don't go through React state here).
+ * Team radio, on air: a title strip in the team's colour with the car
+ * number and the driver, then a waveform while the clip plays and a line
+ * along the foot for how far through it is. There is no transcript to
+ * show — OpenF1 has audio only, and words are never invented.
+ * `progress` is read every frame and written straight to the bar
+ * (per-frame values don't go through React state here).
  */
 export function RadioCall({ driver, progress, onStop }: { driver: any; progress: () => number | null; onStop: () => void }) {
   const team = driver?.teamColor ?? "#8B95A7";
+  const ink = isLight(team) ? "#0B0C0F" : "#FFFFFF";
   const bar = useRef<HTMLSpanElement>(null);
   useEffect(() => {
     let raf = 0;
@@ -413,34 +427,38 @@ export function RadioCall({ driver, progress, onStop }: { driver: any; progress:
     return () => cancelAnimationFrame(raf);
   }, [progress]);
   return (
-    <span className="relative flex items-stretch bg-carbon-900/95 shadow-panel" role="status" aria-label={`Team radio: ${driver?.name ?? driver?.code ?? "driver"}`}>
-      <span className="w-[3px] shrink-0" style={{ background: team }} aria-hidden />
-      <span className="flex items-center gap-3 py-2 pl-2.5 pr-2">
-        <Face src={driver?.thumb} color={team} size={36} />
-        <span className="min-w-0">
-          {/* The label stays neutral: a dark team colour (Red Bull's blue) was hard to read as text. */}
-          <span className="timing flex items-center gap-1.5 text-micro font-bold uppercase tracking-[0.18em] text-carbon-300">
-            <span className="h-1.5 w-1.5 animate-pulse-dot rounded-full" style={{ background: team }} aria-hidden />
-            Team radio
-          </span>
-          <span className="mt-0.5 block max-w-[9rem] truncate font-display sm:max-w-[11rem] text-lg font-black uppercase italic leading-none tracking-tight text-carbon-100">
-            {driver?.name ?? driver?.code}
-          </span>
+    <div className="relative w-full min-w-0 max-w-[24rem] xl:max-w-[28rem] overflow-hidden bg-carbon-900/95 shadow-panel" role="status" aria-label={`Team radio: ${driver?.name ?? driver?.code ?? "driver"}`}>
+      <div className="relative flex h-7 items-center gap-2 px-3 xl:h-8" style={{ color: ink }}>
+        <motion.span
+          aria-hidden
+          className="absolute inset-0 origin-right"
+          style={{ background: team }}
+          initial={{ scaleX: 0 }}
+          animate={{ scaleX: 1, transition: { duration: 0.4, ease: EASE.out, delay: 0.05 } }}
+        />
+        {driver?.number != null && <span className="timing relative text-sm font-bold leading-none xl:text-base">{driver.number}</span>}
+        <span className="relative min-w-0 truncate font-display text-sm font-black uppercase italic leading-none tracking-wide xl:text-base">{surname(driver)}</span>
+        <span className="timing relative ml-auto flex shrink-0 items-center gap-1.5 text-micro font-bold uppercase tracking-[0.18em]">
+          <span className="h-1.5 w-1.5 animate-pulse-dot rounded-full" style={{ background: ink }} aria-hidden />
+          Radio
         </span>
-        <Waveform color={team} />
+      </div>
+      <div className="flex h-14 items-center gap-3 pl-3 pr-2 xl:h-16">
+        <Face src={driver?.thumb} color={team} size={44} />
+        <Waveform color={isLight(team) ? team : `color-mix(in srgb, ${team} 70%, #FFFFFF)`} />
         <button
           type="button"
           onClick={onStop}
           aria-label="Stop team radio"
-          className="grid h-7 w-7 shrink-0 place-items-center rounded-row border border-carbon-700 text-carbon-300 transition-colors duration-micro hover:border-carbon-600 hover:text-carbon-100"
+          className="grid h-8 w-8 shrink-0 place-items-center rounded-row border border-carbon-700 text-carbon-300 transition-colors duration-micro hover:border-carbon-600 hover:text-carbon-100"
         >
-          <Square size={10} fill="currentColor" />
+          <Square size={11} fill="currentColor" />
         </button>
-      </span>
-      <span className="absolute inset-x-0 bottom-0 h-[2px] bg-carbon-700" aria-hidden>
+      </div>
+      <span className="absolute inset-x-0 bottom-0 h-[3px] bg-carbon-700" aria-hidden>
         <span ref={bar} className="block h-full origin-left" style={{ background: team, transform: "scaleX(0)" }} />
       </span>
-    </span>
+    </div>
   );
 }
 

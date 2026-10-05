@@ -8,7 +8,7 @@ import { getReplayTimeline, getReplayGpsWindow, getTrackOutline, getPostRaceInte
 import { createGpsBuffer, floorIndex } from "@/services/replayModel";
 import { EASE, SPRING, PRESS } from "@/lib/motion";
 import { useForceVisible } from "./MotionProvider";
-import { GridIntro, DriverCard, Moment, RadioCall, PodiumFinish, CardStats } from "./replay/ReplayStage";
+import { GridIntro, DriverCard, Moment, FastestLapCall, RadioCall, PodiumFinish, CardStats } from "./replay/ReplayStage";
 import ReplayCanvas, { ReplayClock } from "./replay/ReplayCanvas";
 import ReplayTimeline from "./replay/ReplayTimeline";
 import TimingTower from "./replay/TimingTower";
@@ -446,6 +446,10 @@ export default function RaceReplay() {
     };
   }
 
+  /* A fastest lap is called with its own graphic, in the map's corner, not as a headline. */
+  const fastestCall =
+    lowerThird?.type === "fastest" && lowerThird.time && lowerThird.nums?.length && drv(lowerThird.nums[0]).code ? drv(lowerThird.nums[0]) : null;
+
   /* The right-hand column is on stage while it has something to show. */
   const rightOpen = feedOpen || !!(focusCar && card);
 
@@ -486,12 +490,11 @@ export default function RaceReplay() {
               (and over the map it sat on the cars it described). */}
           <div className="relative hidden h-14 min-w-0 flex-1 lg:block">
             <AnimatePresence>
-              {lowerThird && (
+              {lowerThird && !fastestCall && (
                 <Moment
                   key={lowerThird.key}
                   event={lowerThird}
                   color={lowerThird.nums?.length ? drv(lowerThird.nums[0]).teamColor : undefined}
-                  driver={lowerThird.nums?.length ? drv(lowerThird.nums[0]) : undefined}
                   compact
                 />
               )}
@@ -597,31 +600,33 @@ export default function RaceReplay() {
           {/* The moment, on phones: over the top of the map (from lg up it
               sits in the header line instead, clear of the track). */}
           <AnimatePresence>
-            {lowerThird && !showPodium && (
+            {lowerThird && !fastestCall && !showPodium && (
               <div key={lowerThird.key} className="absolute inset-x-0 top-10 lg:hidden">
-                <Moment
-                  event={lowerThird}
-                  color={lowerThird.nums?.length ? drv(lowerThird.nums[0]).teamColor : undefined}
-                  driver={lowerThird.nums?.length ? drv(lowerThird.nums[0]) : undefined}
-                />
+                <Moment event={lowerThird} color={lowerThird.nums?.length ? drv(lowerThird.nums[0]).teamColor : undefined} />
               </div>
             )}
           </AnimatePresence>
 
-          {/* Foot of the map: who's on the radio. (The followed driver's
-              card lives in the right-hand column — over the map it hid
-              the cars in that corner.) */}
-          <div className="pointer-events-none absolute inset-x-3 bottom-3 z-10 flex justify-end">
+          {/* Foot of the map: the two broadcast lower thirds — fastest lap in
+              the left corner, team radio in the right. Both come and go;
+              the followed driver's card, which stayed, lives in the
+              right-hand column because over the map it hid the cars in
+              that corner. Side by side from xl; stacked below that, where
+              the map is too narrow for both. */}
+          <div className="pointer-events-none absolute inset-x-3 bottom-3 z-10 flex flex-col gap-2 xl:flex-row xl:items-end xl:justify-between">
+            <AnimatePresence>
+              {fastestCall && !showPodium && <FastestLapCall key={lowerThird.key} event={lowerThird} driver={fastestCall} />}
+            </AnimatePresence>
             {/* Team radio: now playing, or the browser's first-play block */}
             <AnimatePresence>
               {(radio.current || radio.blocked) && (
                 <motion.div
                   key={radio.blocked ? "blocked" : radio.current!.url}
-                  className="pointer-events-auto flex items-stretch self-end lg:ml-auto"
+                  className={`pointer-events-auto ml-auto flex justify-end ${radio.blocked ? "" : "w-full min-w-0 max-w-[24rem] xl:max-w-[28rem]"}`}
                   /* Slides in from the edge (a transform; the clip-path wipe it replaced repainted every frame). */
-                  initial={{ opacity: 0, x: 28 }}
+                  initial={{ opacity: 0, x: 36 }}
                   animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: 28, transition: { duration: 0.25, ease: EASE.in } }}
+                  exit={{ opacity: 0, x: 28, transition: { duration: 0.28, ease: EASE.in } }}
                   transition={{ duration: 0.4, ease: EASE.out }}
                 >
                   {radio.blocked ? (
@@ -638,7 +643,6 @@ export default function RaceReplay() {
                 </motion.div>
               )}
             </AnimatePresence>
-
           </div>
 
           {/* After the flag: the podium, and the way into the interviews. */}

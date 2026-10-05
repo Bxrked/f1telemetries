@@ -1555,6 +1555,9 @@ export async function getReplayTimeline() {
         if (!d) return;
         Object.assign(d, {
           name: `${r.Driver.givenName} ${r.Driver.familyName}`,
+          /* In two parts for the broadcast graphics (small first name, big surname). */
+          givenName: r.Driver.givenName,
+          familyName: r.Driver.familyName,
           number: +r.number,
           nationality: r.Driver.nationality || null,
           flag: flagFor(r.Driver.nationality),
