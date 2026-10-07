@@ -6,6 +6,7 @@ import { ChevronUp, ChevronDown } from "lucide-react";
 import { getTeammateBattles, getFeedStatus } from "@/services/f1Service";
 import { EASE, SPRING, rowDelay } from "@/lib/motion";
 import { useForceVisible } from "./MotionProvider";
+import { useStageReady } from "./RouteCinematic";
 import MockDataBanner from "./MockDataBanner";
 import CountUp from "./CountUp";
 import DriverSide from "./DriverCutout";
@@ -151,6 +152,10 @@ export default function TeammatesPage() {
   const [index, setIndex] = useState(0);
   const [dir, setDir] = useState(1);
   const forceVisible = useForceVisible();
+  /* The first team's entrance waits for the page-transition ribbons to
+     leave; the screen is simply not mounted until then (the data and the
+     portraits load underneath meanwhile). */
+  const stageClear = useStageReady() || forceVisible;
   const stageRef = useRef<HTMLElement>(null);
   const indexRef = useRef(0);
   indexRef.current = index;
@@ -184,9 +189,10 @@ export default function TeammatesPage() {
     if (team) window.history.replaceState(null, "", `#${slug(team.id)}`);
   }, [index, teams]);
 
-  /* Warm the two teams either side so a step never waits on a portrait. */
+  /* Warm this team and the two either side, so neither a step nor the
+     first screen (held back until the ribbons leave) waits on a portrait. */
   useEffect(() => {
-    for (const t of [teams[index - 1], teams[index + 1], teams[index + 2], teams[index - 2]]) {
+    for (const t of [teams[index], teams[index - 1], teams[index + 1], teams[index + 2], teams[index - 2]]) {
       for (const d of t ? [t.a, t.b] : []) {
         for (const src of [d.portrait, d.flag]) if (src) new Image().src = src;
       }
@@ -272,7 +278,7 @@ export default function TeammatesPage() {
       ) : (
         <>
           <AnimatePresence mode="wait" custom={dir} initial={!forceVisible}>
-            <Screen key={team.id} team={team} index={index} data={data} dir={dir} />
+            {stageClear && <Screen key={team.id} team={team} index={index} data={data} dir={dir} />}
           </AnimatePresence>
 
           <p className="sr-only" aria-live="polite">

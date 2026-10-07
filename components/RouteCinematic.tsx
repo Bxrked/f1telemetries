@@ -21,7 +21,8 @@ import { useReducedMotion } from "framer-motion";
  * loop; React only mounts/unmounts the overlay and sets the label.
  *
  * The home intro waits for us (transitionBusy) so the mark doesn't start
- * wiping in while the ribbons are still leaving.
+ * wiping in while the ribbons are still leaving. Every other page's
+ * opening waits the same way, through useStageReady.
  */
 
 /** What the sweep says for each destination. */
@@ -40,6 +41,41 @@ export const useCinematic = () => useContext(CinematicCtx);
 let busy = false;
 /** True from the first frame of a sweep until the new page is uncovered. */
 export const transitionBusy = () => busy;
+
+/* If the ribbons never report clear, a page opens anyway: content is
+   never hostage to an animation. Longer than the longest sweep. */
+const STAGE_FAILSAFE_MS = 6500;
+
+/**
+ * True once the screen is the page's own: at once on a direct load, or
+ * when the ribbons have left after a transition.
+ *
+ * A page mounts underneath the ribbons about a second before they leave.
+ * An opening that starts on mount therefore plays to nobody — measured on
+ * the telemetry page, every fade had finished 0.2 s before it was
+ * uncovered, and it read as "opens with no animation". So an opening
+ * sequence waits for this.
+ */
+export function useStageReady() {
+  const [ready, setReady] = useState(() => !busy);
+  useEffect(() => {
+    if (ready) return;
+    let raf = 0;
+    const done = () => setReady(true);
+    /* A timer as well as the frame loop: frames stop in a background tab. */
+    const failsafe = setTimeout(done, STAGE_FAILSAFE_MS);
+    const tick = () => {
+      if (!busy) done();
+      else raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => {
+      cancelAnimationFrame(raf);
+      clearTimeout(failsafe);
+    };
+  }, [ready]);
+  return ready;
+}
 
 /* Work in a 1600×1000 box drawn with `slice`, so the line keeps its shape
    at any aspect ratio. Portrait screens get the same box turned 90° —

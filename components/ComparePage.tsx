@@ -10,6 +10,7 @@ import MockDataBanner from "./MockDataBanner";
 import { GRID, TICK, AXIS_LINE, COMPOUND as COMPOUND_HEX } from "@/lib/chartTheme";
 import TyreStintTimeline from "./TyreStintTimeline";
 import CountUp from "./CountUp";
+import { useStageReady } from "./RouteCinematic";
 import DriverSide, { isLight } from "./DriverCutout";
 import PublisherNotice from "./PublisherNotice";
 import { EASE, SPRING, VIEWPORT, panelReveal } from "@/lib/motion";
@@ -524,6 +525,8 @@ export default function ComparePage() {
   /* Which side the next pick from the strip replaces. */
   const [slot, setSlot] = useState<"a" | "b">("b");
   const forceVisible = useForceVisible();
+  /* The verdict's entrance waits for the page-transition ribbons to leave. */
+  const stageClear = useStageReady() || forceVisible;
   const stripRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -560,6 +563,12 @@ export default function ComparePage() {
   const B = data?.drivers.find((d: any) => d.code === codeB);
   const { colA, colB } = pairColours(A, B);
 
+  /* Warm the pair's pictures: the verdict is held back until the ribbons
+     leave, and shouldn't then wait on a portrait. */
+  useEffect(() => {
+    for (const d of [A, B]) for (const src of [d?.portrait, d?.flag]) if (src) new Image().src = src;
+  }, [A, B]);
+
   /* The verdict follows a pick at once; the breakdown follows a beat
      later (see DETAIL_DELAY_MS), so its charts don't rebuild mid-swap. */
   const now = useMemo(() => (A && B ? analyse(A, B) : null), [A, B]);
@@ -581,6 +590,15 @@ export default function ComparePage() {
           Loading lap data
         </span>
       </main>
+    );
+  }
+
+  /* Everything is ready but the ribbons are still on screen: hold a bare
+     stage, so the entrance plays when it can be seen rather than
+     underneath them. The portraits load meanwhile. */
+  if (!stageClear) {
+    return (
+      <main className="relative min-h-0 w-full flex-1 bg-black" aria-busy="true" />
     );
   }
 

@@ -20,12 +20,15 @@ export default function CountUp({
   decimals = 0,
   duration = 0.9,
   delay = 0,
+  play = true,
   className = "",
 }: {
   value: number;
   decimals?: number;
   duration?: number;
   delay?: number;
+  /** Hold at zero until true — for a figure that is one beat of a longer opening. */
+  play?: boolean;
   className?: string;
 }) {
   const ref = useRef<HTMLSpanElement>(null);
@@ -40,7 +43,7 @@ export default function CountUp({
       setShown(value);
       return;
     }
-    if (!inView) return;
+    if (!inView || !play) return;
     const controls = animate(0, value, {
       duration,
       delay,
@@ -48,7 +51,7 @@ export default function CountUp({
       onUpdate: setShown,
     });
     return () => controls.stop();
-  }, [inView, still, value, duration, delay]);
+  }, [inView, play, still, value, duration, delay]);
 
   return (
     <span ref={ref} className={`tabular-nums ${className}`}>

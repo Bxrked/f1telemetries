@@ -40,24 +40,27 @@ const AWAY_MS = 260;
  * starts) and RaceReplay unmounts it — the drivers leave to their sides.
  * Any click or key skips straight to the start.
  */
-export function GridIntro({ data, front, onGo, note }: { data: any; front: [any, any]; onGo: () => void; note?: string }) {
+/* `armed`: the sequence runs on timers, so it holds on its black stage
+   until the screen is ours (the page-transition ribbons have left). */
+export function GridIntro({ data, front, onGo, note, armed = true }: { data: any; front: [any, any]; onGo: () => void; note?: string; armed?: boolean }) {
   const [lit, setLit] = useState(0);
   const [out, setOut] = useState(false);
 
   useEffect(() => {
+    if (!armed) return;
     const timers: ReturnType<typeof setTimeout>[] = [];
     for (let i = 1; i <= 5; i++) timers.push(setTimeout(() => setLit(i), LIGHT_FIRST_MS + (i - 1) * LIGHT_STEP_MS));
     const off = LIGHT_FIRST_MS + 4 * LIGHT_STEP_MS + LIGHTS_HOLD_MS;
     timers.push(setTimeout(() => setOut(true), off));
     timers.push(setTimeout(onGo, off + AWAY_MS));
     return () => timers.forEach(clearTimeout);
-  }, [onGo]);
+  }, [onGo, armed]);
 
   const [pole, second] = front;
   return (
     <motion.div
       initial="enter"
-      animate="show"
+      animate={armed ? "show" : "enter"}
       exit="exit"
       variants={{ enter: { opacity: 1 }, show: { opacity: 1 }, exit: { opacity: 0, transition: { duration: 0.45, ease: EASE.in, delay: 0.12 } } }}
       onClick={onGo}

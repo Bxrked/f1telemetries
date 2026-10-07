@@ -8,6 +8,7 @@ import { getReplayTimeline, getReplayGpsWindow, getTrackOutline, getPostRaceInte
 import { createGpsBuffer, floorIndex } from "@/services/replayModel";
 import { EASE, SPRING, PRESS } from "@/lib/motion";
 import { useForceVisible } from "./MotionProvider";
+import { useStageReady } from "./RouteCinematic";
 import { GridIntro, DriverCard, Moment, FastestLapCall, RadioCall, PodiumFinish, CardStats } from "./replay/ReplayStage";
 import ReplayCanvas, { ReplayClock } from "./replay/ReplayCanvas";
 import ReplayTimeline from "./replay/ReplayTimeline";
@@ -103,6 +104,11 @@ export default function RaceReplay() {
   introRef.current = intro;
   const reducedMotion = useReducedMotion();
   const forceVisible = useForceVisible();
+  /* The intro's black stage goes up as soon as the data is in, so the
+     page-transition ribbons uncover it rather than the map; its lights
+     and front row hold until the ribbons have left. Started on mount, the
+     first two or three reds used to come on underneath them. */
+  const stageClear = useStageReady() || forceVisible;
   const startRace = useCallback(() => {
     if (introRef.current === "done") return;
     introRef.current = "done";
@@ -124,10 +130,10 @@ export default function RaceReplay() {
      A rolling start has no lights to show, so it gets the beat too. */
   const showIntro = intro === "lights" && !!frontRow && !reducedMotion && !forceVisible && data?.start?.kind !== "rolling";
   useEffect(() => {
-    if (intro !== "lights" || showIntro) return;
+    if (intro !== "lights" || showIntro || !stageClear) return;
     const timer = setTimeout(startRace, 900);
     return () => clearTimeout(timer);
-  }, [intro, showIntro, startRace]);
+  }, [intro, showIntro, stageClear, startRace]);
   /* Race feed panel — collapsible on desktop, remembered per browser. */
   const [feedOpen, setFeedOpen] = useState(true);
   useEffect(() => {
@@ -259,10 +265,14 @@ export default function RaceReplay() {
     };
   }, [data, tMax, lowerTimes, lowerTypes, clips, clipTimes]);
 
-  /* Pausing the race pauses the radio mid-sentence; playing resumes it. */
+  /* Pausing the race pauses the radio mid-sentence; playing resumes it.
+     Not once the replay has run out, though: the clock stops there by
+     itself, and that silenced every message sent after the flag — the
+     cool-down lap radio — the instant it was clicked. */
+  const raceOver = !!tl && ui.t >= tMax;
   useEffect(() => {
-    radio.setRacePlaying(ui.playing);
-  }, [ui.playing, radio]);
+    radio.setRacePlaying(ui.playing || raceOver);
+  }, [ui.playing, raceOver, radio]);
 
   /* ---- Controls ---- */
   const sync = () => setUi({ ...clockRef.current });
@@ -281,7 +291,12 @@ export default function RaceReplay() {
   );
   const togglePlay = useCallback(() => {
     const c = clockRef.current;
-    if (!c.playing && c.t >= tMax) c.t = tOpen;
+    if (!c.playing && c.t >= tMax) {
+      /* Round again from the start: post-race radio belongs to the end. */
+      c.t = tOpen;
+      radioRef.current.stop();
+      handStarted.current = null;
+    }
     c.playing = !c.playing;
     sync();
   }, [tOpen, tMax]);
@@ -814,6 +829,7 @@ export default function RaceReplay() {
             data={data}
             front={frontRow}
             onGo={startRace}
+            armed={stageClear}
             note={
               data.start?.behindSafetyCar
                 ? `Lap ${data.start.lap} · after ${data.start.lap - 1} lap${data.start.lap > 2 ? "s" : ""} behind the safety car`

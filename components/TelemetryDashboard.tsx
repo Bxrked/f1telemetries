@@ -11,8 +11,8 @@
  * skeleton until its data is in and a "Demo data" tag if it fell back.
  */
 
-import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { motion, useInView, useScroll, useSpring } from "framer-motion";
+import { MutableRefObject, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { motion, useInView, useScroll, useSpring, Variants } from "framer-motion";
 import {
   getSessionInfo, getSectorAnalysis, getTyreStints, getPitStops, getDegradation, getPositionChanges,
   getPerformanceMetrics, getSeasonSchedule, getStandings, getFeedStatus, getTrackOutline, getPositionWorm, getRaceControl,
@@ -20,6 +20,7 @@ import {
 import { EASE, SPRING, VIEWPORT, panelReveal, rowDelay, wordRise, ruleWipe, metaFade } from "@/lib/motion";
 import CountUp from "./CountUp";
 import { useForceVisible } from "./MotionProvider";
+import { useStageReady } from "./RouteCinematic";
 import PodiumDriver from "./PodiumDriver";
 import TrackMap from "./TrackMap";
 import StatStrip from "./StatStrip";
@@ -155,24 +156,63 @@ function Block({ eyebrow, title, mock, children, className = "" }: { eyebrow: st
 
 /* ---- Opening screen: the podium ---------------------------------------- */
 
+/* The opening is one sequence, in reading order, run by a single switch on
+   the section (hidden → show): the race name rises word by word, the red
+   rule wipes in, the podium arrives third, second, then the winner, and
+   the four facts draw in and count up. Beats are seconds from the moment
+   the screen is ours — see useStageReady: started on mount, the whole
+   thing used to play underneath the page-transition ribbons. */
+const BEAT = { p3: 0.25, p2: 0.42, p1: 0.62, facts: 0.9, factStep: 0.08 };
+
+const eyebrowIn: Variants = {
+  hidden: { opacity: 0, y: 6 },
+  show: { opacity: 1, y: 0, transition: { duration: 0.35, ease: EASE.out } },
+};
+const factRule: Variants = {
+  hidden: { scaleX: 0 },
+  show: (i: number = 0) => ({ scaleX: 1, transition: { duration: 0.5, ease: EASE.out, delay: BEAT.facts + i * BEAT.factStep } }),
+};
+const factBody: Variants = {
+  hidden: { opacity: 0, y: 10 },
+  show: (i: number = 0) => ({ opacity: 1, y: 0, transition: { duration: 0.4, ease: EASE.out, delay: BEAT.facts + 0.08 + i * BEAT.factStep } }),
+};
+
 function Fact({ label, value, sub, i }: { label: string; value: ReactNode; sub?: ReactNode; i: number }) {
-  const forceVisible = useForceVisible();
   return (
-    <motion.div
-      initial={forceVisible ? false : { opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.4, ease: EASE.out, delay: 0.45 + i * 0.07 }}
-      className="border-t border-carbon-700/70 pt-2"
-    >
-      <p className="eyebrow">{label}</p>
-      <p className="timing mt-1 text-2xl font-bold leading-none text-carbon-100">{value}</p>
-      {sub && <p className="timing mt-1 truncate text-micro uppercase tracking-wider text-carbon-400">{sub}</p>}
-    </motion.div>
+    <div className="relative pt-2">
+      {/* The hairline draws across, then the figure arrives under it. */}
+      <motion.span aria-hidden custom={i} variants={factRule} className="absolute inset-x-0 top-0 block h-px origin-left bg-carbon-700/70" />
+      <motion.div custom={i} variants={factBody}>
+        <p className="eyebrow">{label}</p>
+        <p className="timing mt-1 text-2xl font-bold leading-none text-carbon-100">{value}</p>
+        {sub && <p className="timing mt-1 truncate text-micro uppercase tracking-wider text-carbon-400">{sub}</p>}
+      </motion.div>
+    </div>
   );
 }
 
-function Podium({ session, feed, positions, pitStops, lag }: { session: any; feed: any; positions?: any[]; pitStops?: any[]; lag: PublisherLag }) {
+/**
+ * A headline figure that counts up on its beat of the opening. If its feed
+ * landed after the beat had passed (a cold load), it counts straight away
+ * rather than waiting the beat out again. The delay is fixed at mount: a
+ * changing one would restart the count.
+ */
+function Beat({ value, decimals = 0, i, on, startedAt }: { value: number; decimals?: number; i: number; on: boolean; startedAt: MutableRefObject<number | null> }) {
+  const [delay] = useState(() => {
+    const at = BEAT.facts + 0.15 + i * BEAT.factStep;
+    return startedAt.current == null ? at : Math.max(0, at - (performance.now() - startedAt.current) / 1000);
+  });
+  return <CountUp value={value} decimals={decimals} duration={0.9} delay={delay} play={on} />;
+}
+
+function Podium({ session, feed, positions, pitStops, lag, stage }: { session: any; feed: any; positions?: any[]; pitStops?: any[]; lag: PublisherLag; stage: boolean }) {
   const forceVisible = useForceVisible();
+  const on = stage || forceVisible;
+  /* When the sequence began, for figures whose feed lands late. */
+  const startedAt = useRef<number | null>(null);
+  useEffect(() => {
+    if (on && startedAt.current == null) startedAt.current = performance.now();
+  }, [on]);
   const top = useMemo(
     () => (positions ?? []).filter((p) => !p.dnf && p.finish >= 1 && p.finish <= 3).sort((a, b) => a.finish - b.finish),
     [positions]
@@ -186,27 +226,40 @@ function Podium({ session, feed, positions, pitStops, lag }: { session: any; fee
   const margin = gap ? +gap[1] : null;
 
   return (
-    <section className="relative flex flex-col border-b border-carbon-800 lg:h-[calc(100svh-66px)] lg:max-h-[940px] lg:min-h-[640px] lg:flex-row">
+    <motion.section
+      initial={forceVisible ? false : "hidden"}
+      animate={on ? "show" : "hidden"}
+      className="relative flex flex-col border-b border-carbon-800 lg:h-[calc(100svh-66px)] lg:max-h-[940px] lg:min-h-[640px] lg:flex-row"
+    >
       {/* Words */}
       <div className="relative z-10 flex shrink-0 flex-col justify-center px-4 py-8 sm:px-8 lg:w-[36%] lg:max-w-[560px] lg:py-0 lg:pl-10 lg:pr-4">
-        <motion.div
-          initial={forceVisible ? false : { opacity: 0, y: 24 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5, ease: EASE.out }}
-        >
-          <p className="eyebrow flex items-center gap-2">
+        <div>
+          <motion.p variants={eyebrowIn} className="eyebrow flex items-center gap-2">
             <span className="inline-block h-1.5 w-1.5 animate-pulse-dot rounded-full bg-f1red-bright" />
             Round {session.round} · {session.season} · race result
-          </p>
+          </motion.p>
           <h1 className="mt-3 font-display text-5xl font-black uppercase italic leading-[0.88] tracking-tight sm:text-6xl xl:text-7xl" aria-label={session.meetingName}>
             {words.map((w, i) => (
-              <span key={i} className={/^grand$|^prix$/i.test(w) ? "text-carbon-400" : "text-carbon-100"}>
-                {w}{" "}
+              /* The slot clips the rising word. Padding keeps the italic
+                 overhang (right) and any accent above the capitals (top,
+                 "SÃO") from being shaved off by the mask; the negative
+                 margins give that room back, so the words sit exactly as
+                 plain text would. The space after each slot is a real one:
+                 the heading still reads, selects and copies as words. */
+              <span key={i} aria-hidden>
+                <span className="-mr-[0.12em] -mt-[0.14em] inline-block overflow-hidden pr-[0.12em] pt-[0.14em] align-bottom">
+                  <motion.span custom={i} variants={wordRise} className={`inline-block ${/^grand$|^prix$/i.test(w) ? "text-carbon-400" : "text-carbon-100"}`}>
+                    {w}
+                  </motion.span>
+                </span>{" "}
               </span>
             ))}
           </h1>
-          <span className="mt-4 block h-[3px] w-20 -skew-x-[20deg] bg-f1red" />
-          <p className="timing mt-4 flex flex-wrap items-center gap-x-3 gap-y-1 text-label text-carbon-300">
+          {/* The slant sits on a wrapper: the wipe animates scaleX, which would replace a skew on the same element. */}
+          <span className="mt-4 block w-20 -skew-x-[20deg]">
+            <motion.span variants={ruleWipe} className="block h-[3px] origin-left bg-f1red" />
+          </span>
+          <motion.p variants={metaFade} className="timing mt-4 flex flex-wrap items-center gap-x-3 gap-y-1 text-label text-carbon-300">
             <span className="text-carbon-100">{session.circuitName}</span>
             <span className="text-carbon-600">/</span>
             <span>{session.location}</span>
@@ -215,8 +268,8 @@ function Podium({ session, feed, positions, pitStops, lag }: { session: any; fee
               <span className={`h-1.5 w-1.5 rounded-full ${live ? "animate-pulse-dot bg-sector-green" : "bg-sector-yellow"}`} />
               {live ? "Live data" : feed?.mode === "partial" ? `Partial live ${feed.live}/${feed.total}` : feed?.mode === "loading" ? "Syncing" : "Demo data"}
             </span>
-          </p>
-        </motion.div>
+          </motion.p>
+        </div>
 
         <div className="mt-8 grid grid-cols-2 gap-x-6 gap-y-5">
           <Fact
@@ -226,7 +279,7 @@ function Podium({ session, feed, positions, pitStops, lag }: { session: any; fee
             value={
               margin != null ? (
                 <>
-                  +<CountUp value={margin} decimals={3} duration={0.9} delay={0.55} />
+                  +<Beat value={margin} decimals={3} i={0} on={on} startedAt={startedAt} />
                 </>
               ) : (
                 p2?.raceTime ?? "—"
@@ -248,7 +301,7 @@ function Podium({ session, feed, positions, pitStops, lag }: { session: any; fee
               climber ? (
                 <>
                   {climber.delta > 0 ? "+" : climber.delta < 0 ? "−" : ""}
-                  <CountUp value={Math.abs(climber.delta)} duration={0.9} delay={0.7} />
+                  <Beat value={Math.abs(climber.delta)} i={2} on={on} startedAt={startedAt} />
                 </>
               ) : (
                 "—"
@@ -256,18 +309,18 @@ function Podium({ session, feed, positions, pitStops, lag }: { session: any; fee
             }
             sub={climber ? `${climber.code} · P${climber.grid} to P${climber.finish}` : undefined}
           />
-          <Fact i={3} label="Pit stops" value={pitStops ? <CountUp value={pitStops.length} duration={0.9} delay={0.75} /> : "—"} sub={`${session.totalLaps} laps`} />
+          <Fact i={3} label="Pit stops" value={pitStops ? <Beat value={pitStops.length} i={3} on={on} startedAt={startedAt} /> : "—"} sub={`${session.totalLaps} laps`} />
         </div>
       </div>
 
-      {/* Podium: P2 · P1 · P3 */}
+      {/* Podium: P2 · P1 · P3 across the stage, arriving third, second, then the winner. */}
       {/* Fixed height when stacked (flex-1 in an auto-height column collapses to nothing). */}
       <div className="relative grid h-[340px] min-h-0 shrink-0 grid-cols-[1fr_1.15fr_1fr] sm:h-[440px] lg:h-auto lg:flex-1">
         {p1 ? (
           <>
-            <PodiumDriver d={p2 ?? p1} place={2} delay={0.25} />
-            <PodiumDriver d={p1} place={1} delay={0.1} />
-            <PodiumDriver d={p3 ?? p1} place={3} delay={0.4} />
+            <PodiumDriver staged d={p2 ?? p1} place={2} delay={BEAT.p2} />
+            <PodiumDriver staged d={p1} place={1} delay={BEAT.p1} />
+            <PodiumDriver staged d={p3 ?? p1} place={3} delay={BEAT.p3} />
           </>
         ) : (
           <div className="col-span-3 grid place-items-center">
@@ -275,7 +328,7 @@ function Podium({ session, feed, positions, pitStops, lag }: { session: any; fee
           </div>
         )}
       </div>
-    </section>
+    </motion.section>
   );
 }
 
@@ -523,6 +576,8 @@ export default function TelemetryDashboard() {
   const [active, setActive] = useState<string | null>(null);
   /* Set while the results provider is behind — see PublisherNotice. */
   const lag = usePublisherLag();
+  /* The opening screen waits for the page-transition ribbons to leave. */
+  const stage = useStageReady();
 
   useEffect(() => {
     let cancelled = false;
@@ -593,7 +648,7 @@ export default function TelemetryDashboard() {
     <>
     <PublisherNotice page="telemetry" />
     <main className="w-full min-w-0 bg-black">
-      <Podium session={s} feed={feed} positions={d.positions} pitStops={d.pitStops} lag={lag} />
+      <Podium session={s} feed={feed} positions={d.positions} pitStops={d.pitStops} lag={lag} stage={stage} />
       <Rail active={active} />
 
       <div className="mx-auto w-full max-w-[1400px] space-y-20 px-4 pb-24 pt-10 sm:px-8 xl:pr-48">
