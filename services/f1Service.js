@@ -64,29 +64,41 @@ const COUNTRY_CODES = {
   UK: "GBR", "Great Britain": "GBR", Hungary: "HUN", Belgium: "BEL",
   Netherlands: "NED", Azerbaijan: "AZE", Singapore: "SGP", Mexico: "MEX",
   Brazil: "BRA", Qatar: "QAT", UAE: "UAE", "United Arab Emirates": "UAE",
+  Malaysia: "MAS",
 };
 const countryCode = (c) => COUNTRY_CODES[c] ?? (c ?? "").slice(0, 3).toUpperCase();
 
-/** Static circuit facts by Ergast circuitId (decorative metadata). */
+/** Static circuit facts by Ergast circuitId (decorative metadata).
+ *  `record` is the race lap record on the current layout. Checked against
+ *  every race's fastest lap (Jolpica /fastest/1/results) up to Brazil 2026 —
+ *  re-check after each season: Spa, Monza, Suzuka and Abu Dhabi had all
+ *  been beaten in 2024–25 before anyone noticed. */
 const CIRCUIT_FACTS = {
   monaco:        { lengthKm: 3.337, corners: 19, record: { time: "1:12.909", driver: "Lewis Hamilton", year: 2021 } },
   silverstone:   { lengthKm: 5.891, corners: 18, record: { time: "1:27.097", driver: "Max Verstappen", year: 2020 } },
   red_bull_ring: { lengthKm: 4.318, corners: 10, record: { time: "1:05.619", driver: "Carlos Sainz", year: 2020 } },
   villeneuve:    { lengthKm: 4.361, corners: 14, record: { time: "1:13.078", driver: "Valtteri Bottas", year: 2019 } },
   hungaroring:   { lengthKm: 4.381, corners: 14, record: { time: "1:16.627", driver: "Lewis Hamilton", year: 2020 } },
-  monza:         { lengthKm: 5.793, corners: 11, record: { time: "1:21.046", driver: "Rubens Barrichello", year: 2004 } },
-  spa:           { lengthKm: 7.004, corners: 19, record: { time: "1:46.286", driver: "Valtteri Bottas", year: 2018 } },
-  suzuka:        { lengthKm: 5.807, corners: 18, record: { time: "1:30.983", driver: "Lewis Hamilton", year: 2019 } },
+  monza:         { lengthKm: 5.793, corners: 11, record: { time: "1:20.901", driver: "Lando Norris", year: 2025 } },
+  spa:           { lengthKm: 7.004, corners: 19, record: { time: "1:44.701", driver: "Sergio Pérez", year: 2024 } },
+  suzuka:        { lengthKm: 5.807, corners: 18, record: { time: "1:30.965", driver: "Andrea Kimi Antonelli", year: 2025 } },
   jeddah:        { lengthKm: 6.174, corners: 27, record: { time: "1:30.734", driver: "Lewis Hamilton", year: 2021 } },
   imola:         { lengthKm: 4.909, corners: 19, record: { time: "1:15.484", driver: "Lewis Hamilton", year: 2020 } },
   zandvoort:     { lengthKm: 4.259, corners: 14, record: { time: "1:11.097", driver: "Lewis Hamilton", year: 2021 } },
   americas:      { lengthKm: 5.513, corners: 20, record: { time: "1:36.169", driver: "Charles Leclerc", year: 2019 } },
   rodriguez:     { lengthKm: 4.304, corners: 17, record: { time: "1:17.774", driver: "Valtteri Bottas", year: 2021 } },
   interlagos:    { lengthKm: 4.309, corners: 15, record: { time: "1:10.540", driver: "Valtteri Bottas", year: 2018 } },
-  yas_marina:    { lengthKm: 5.281, corners: 16, record: { time: "1:26.103", driver: "Max Verstappen", year: 2021 } },
+  yas_marina:    { lengthKm: 5.281, corners: 16, record: { time: "1:25.637", driver: "Kevin Magnussen", year: 2024 } },
   albert_park:   { lengthKm: 5.278, corners: 14, record: { time: "1:19.813", driver: "Charles Leclerc", year: 2024 } },
   shanghai:      { lengthKm: 5.451, corners: 16, record: { time: "1:32.238", driver: "Michael Schumacher", year: 2004 } },
   baku:          { lengthKm: 6.003, corners: 20, record: { time: "1:43.009", driver: "Charles Leclerc", year: 2019 } },
+  miami:         { lengthKm: 5.412, corners: 19, record: { time: "1:29.708", driver: "Max Verstappen", year: 2023 } },
+  catalunya:     { lengthKm: 4.657, corners: 14, record: { time: "1:15.743", driver: "Oscar Piastri", year: 2025 } },
+  madring:       { lengthKm: 5.416, corners: 22, record: { time: "1:35.587", driver: "George Russell", year: 2026 } },
+  sepang:        { lengthKm: 5.543, corners: 15, record: { time: "1:34.223", driver: "Juan Pablo Montoya", year: 2004 } },
+  marina_bay:    { lengthKm: 4.940, corners: 19, record: { time: "1:33.808", driver: "Lewis Hamilton", year: 2025 } },
+  vegas:         { lengthKm: 6.201, corners: 17, record: { time: "1:33.365", driver: "Max Verstappen", year: 2025 } },
+  losail:        { lengthKm: 5.419, corners: 16, record: { time: "1:22.384", driver: "Lando Norris", year: 2024 } },
 };
 
 /* ================================================================
@@ -255,7 +267,11 @@ const ageFrom = (dobIso) => {
 const mapResultRow = (r, fieldSize, season) => {
   const grid = +r.grid === 0 ? fieldSize : +r.grid; // grid 0 = pit-lane start
   const finish = +r.position;
-  const finished = r.status === "Finished" || /^\+\d+ Laps?$/.test(r.status);
+  /* Classified = the official result gives a place (positionText is a
+     number; R/W/D/N/E/F otherwise). Not the status wording: Jolpica
+     relabelled "+1 Lap" as "Lapped" in 2026 and every lapped car read as
+     a retirement. A car that retires late enough is still classified. */
+  const finished = /^\d+$/.test(r.positionText ?? "");
   return {
     id: +r.number,
     code: r.Driver.code ?? r.Driver.familyName.slice(0, 3).toUpperCase(),
@@ -268,6 +284,7 @@ const mapResultRow = (r, fieldSize, season) => {
     finish,
     points: +r.points,
     status: r.status,
+    positionText: r.positionText ?? null, // W = did not start, D = disqualified
     dnf: !finished,
     delta: grid - finish,
     /* Redesign: who they are (portrait, flag) and how the race went. */
@@ -857,8 +874,8 @@ export async function getPositionChanges() {
   const drivers = await getDrivers();
   feedStatus.positions = feedStatus.drivers;
   return drivers
-    .map(({ code, name, teamName, teamColor, grid, finish, delta, dnf, status, id, nationality, flag, portrait, thumb, raceTime, fastestLap, fastestRank }) => ({
-      code, name, teamName, teamColor, grid, finish, delta, dnf, status,
+    .map(({ code, name, teamName, teamColor, grid, finish, delta, dnf, status, positionText, id, nationality, flag, portrait, thumb, raceTime, fastestLap, fastestRank }) => ({
+      code, name, teamName, teamColor, grid, finish, delta, dnf, status, positionText,
       number: id, nationality, flag, portrait, thumb, raceTime, fastestLap, fastestRank,
     }))
     .sort((a, b) => b.delta - a.delta);

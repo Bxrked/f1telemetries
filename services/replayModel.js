@@ -768,9 +768,11 @@ export function detectOvertakes(positionRows, { raceStart, pitTimes, excludeDuri
   return out;
 }
 
-/** Penalties actually handed out — not investigations or "no further action". */
+/** Penalties actually handed out — not investigations, "no further action",
+    or the later "PENALTY SERVED - 5 SECOND TIME PENALTY…" notice, which
+    repeats a penalty already given. */
 export const isPenalty = (msg) =>
-  /\bPENALTY\b/.test(msg) && !/NO (FURTHER )?(ACTION|INVESTIGATION)|NO PENALTY|UNDER INVESTIGATION|NOTED/.test(msg);
+  /\bPENALTY\b/.test(msg) && !/NO (FURTHER )?(ACTION|INVESTIGATION)|NO PENALTY|UNDER INVESTIGATION|NOTED|PENALTY SERVED/.test(msg);
 
 /* ================================================================
  * GPS DETAIL BUFFER — real positions, one lap at a time

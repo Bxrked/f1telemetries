@@ -13,7 +13,7 @@
  */
 
 import { writeFileSync } from "node:fs";
-import { parseFiaTranscript, fiaRaceSlug, fiaTranscriptUrls } from "./services/fiaTranscript.js";
+import { parseFiaTranscript, fiaRaceSlug, fiaTranscriptUrls, fiaIndexTranscriptUrl } from "./services/fiaTranscript.js";
 
 let [year, slug] = process.argv.slice(2);
 if (!year) {
@@ -35,6 +35,20 @@ for (const url of fiaTranscriptUrls(year, slug)) {
   t = parseFiaTranscript(html);
   if (t) break;
   console.log("  no transcript at this address");
+}
+if (!t) {
+  /* The route's last try: a transcript on that index posted on the race
+     weekend, whatever the FIA called the race. */
+  const cal = await (await fetch(`https://api.jolpi.ca/ergast/f1/${year}.json?limit=100`)).json();
+  const date = cal.MRData.RaceTable.Races.find((r) => fiaRaceSlug(r.raceName) === slug)?.date;
+  const listedUrl = fiaIndexTranscriptUrl(html, year, date);
+  if (listedUrl) {
+    const res = await fetch(listedUrl, { headers: { "User-Agent": "F1Telemetries diagnostics" } });
+    const page = await res.text();
+    console.log(`${listedUrl}\n→ HTTP ${res.status} (from the FIA's index, posted on the ${date} race weekend)`);
+    t = parseFiaTranscript(page);
+    if (t) console.log("  found it here — add the FIA's name for this race to FIA_NAMES in services/fiaTranscript.js");
+  }
 }
 if (!t) {
   /* The news index the FIA served instead lists what it HAS published —

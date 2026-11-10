@@ -23,8 +23,10 @@ const LS_PREFIX = "f1cache:";
    Teammates page pulls ~10 season pages on a cold load and that drew 429s. */
 const HOST_LIMITS = {
   // windowMs / maxInWindow = strict sliding-rate cap; maxConcurrent = parallel ceiling.
-  // OpenF1 free tier is 3 req/s, so we cap at 3 per rolling 1000ms.
-  "api.openf1.org": { maxConcurrent: 3, maxInWindow: 3, windowMs: 1000 },
+  // OpenF1 free tier is 3 req/s. 3 per 1150ms, not 1000: requests started
+  // exactly a second apart can arrive closer together than that, and a cold
+  // Telemetry load drew the odd 429 at the bare limit.
+  "api.openf1.org": { maxConcurrent: 3, maxInWindow: 3, windowMs: 1150 },
   "api.jolpi.ca": { maxConcurrent: 4, maxInWindow: 4, windowMs: 1000 },
   default: { maxConcurrent: 4, maxInWindow: 6, windowMs: 1000 },
 };

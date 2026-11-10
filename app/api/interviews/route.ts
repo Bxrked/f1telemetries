@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { parseFiaTranscript, fiaTranscriptUrls, fiaRaceSlug } from "@/services/fiaTranscript";
+import { parseFiaTranscript, fiaTranscriptUrls, fiaRaceSlug, fiaIndexTranscriptUrl } from "@/services/fiaTranscript";
 
 /**
  * GET /api/interviews?year=2026&race=azerbaijan
@@ -15,7 +15,11 @@ import { parseFiaTranscript, fiaTranscriptUrls, fiaRaceSlug } from "@/services/f
  *
  * `race` is fiaRaceSlug(raceName). Most names give one FIA address; a name
  * that isn't "<Place> Grand Prix" ("Bahrain Grand Prix in Malaysia") gives
- * two candidates, tried in order — see fiaTranscriptUrls.
+ * two candidates, tried in order — see fiaTranscriptUrls. If those miss,
+ * the news index fia.com serves in their place may list the transcript
+ * under the FIA's own name for the race ("São Paulo" for Jolpica's
+ * "Brazilian"): a post-race transcript posted on the race weekend is
+ * fetched as a third and last try (fiaIndexTranscriptUrl).
  *
  * Cached 30 min. The transcript appears a few hours after the flag; a
  * shorter cache means it shows up soon after, a longer one hits fia.com
@@ -27,15 +31,28 @@ const SCHEDULE_REVALIDATE_S = 6 * 3600;
 /* OpenF1 (and so the replay) starts in 2023. */
 const FIRST_YEAR = 2023;
 
-/** Slugs of the season's races, from Jolpica (cached); null if unreachable. */
-async function seasonSlugs(year: string): Promise<Set<string> | null> {
+/** The season's races, slug → race date, from Jolpica (cached); null if unreachable. */
+async function seasonRaces(year: string): Promise<Map<string, string> | null> {
   try {
     const res = await fetch(`https://api.jolpi.ca/ergast/f1/${year}.json?limit=100`, {
       next: { revalidate: SCHEDULE_REVALIDATE_S },
     });
     if (!res.ok) return null;
     const races = (await res.json())?.MRData?.RaceTable?.Races ?? [];
-    return new Set(races.map((r: any) => fiaRaceSlug(r.raceName)));
+    return new Map(races.map((r: any) => [fiaRaceSlug(r.raceName), String(r.date ?? "")]));
+  } catch {
+    return null;
+  }
+}
+
+/** A page from fia.com, or null if it couldn't be fetched. */
+async function fiaPage(url: string): Promise<string | null> {
+  try {
+    const res = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; F1Telemetries/1.0; +https://f1telemetries.com)" },
+      next: { revalidate: REVALIDATE_S },
+    });
+    return res.ok ? await res.text() : null;
   } catch {
     return null;
   }
@@ -53,9 +70,9 @@ export async function GET(req: Request) {
   }
   /* Calendar check before touching fia.com. If the calendar itself can't
      be reached, refuse rather than fall open. */
-  const slugs = await seasonSlugs(year);
-  if (!slugs) return NextResponse.json({ status: "unreachable" }, { status: 502 });
-  if (!slugs.has(race)) return NextResponse.json({ status: "unknown-race" }, { status: 404 });
+  const races = await seasonRaces(year);
+  if (!races) return NextResponse.json({ status: "unreachable" }, { status: 502 });
+  if (!races.has(race)) return NextResponse.json({ status: "unknown-race" }, { status: 404 });
 
   /* One address for an ordinary race name, two for an unusual one. */
   const sources = fiaTranscriptUrls(year, race);
@@ -67,23 +84,24 @@ export async function GET(req: Request) {
      asks every time. */
   const waiting = { "Cache-Control": `public, max-age=0, s-maxage=${REVALIDATE_S}, must-revalidate` };
   let reached = false;
+  let index = ""; // the news index fia.com served for an address it doesn't have
   for (const source of sources) {
-    let html: string;
-    try {
-      const res = await fetch(source, {
-        headers: { "User-Agent": "Mozilla/5.0 (compatible; F1Telemetries/1.0; +https://f1telemetries.com)" },
-        next: { revalidate: REVALIDATE_S },
-      });
-      if (!res.ok) throw new Error(`fia.com ${res.status}`);
-      html = await res.text();
-    } catch {
-      continue;
-    }
+    const html = await fiaPage(source);
+    if (html == null) continue;
     reached = true;
     /* fia.com answers unknown URLs with its news index (200), so "not
        published yet" is a parse that finds no transcript, not a 404. */
     const transcript = parseFiaTranscript(html);
     if (transcript) return NextResponse.json({ status: "ok", source, ...transcript }, { headers: cache });
+    index = html;
+  }
+  /* The FIA may have its own name for this race. Its index lists what it
+     has posted; one dated on the race weekend is this race's. */
+  const listed = fiaIndexTranscriptUrl(index, year, races.get(race));
+  if (listed && !sources.includes(listed)) {
+    const html = await fiaPage(listed);
+    const transcript = html == null ? null : parseFiaTranscript(html);
+    if (transcript) return NextResponse.json({ status: "ok", source: listed, ...transcript }, { headers: cache });
   }
   if (!reached) return NextResponse.json({ status: "unreachable", source: sources[0] }, { status: 502 });
   return NextResponse.json({ status: "not-published", source: sources[0] }, { status: 404, headers: waiting });

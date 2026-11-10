@@ -363,7 +363,7 @@ function PositionMoves({ data }: { data: any[] }) {
             <Face src={d.thumb} color={d.teamColor} size={24} />
             <span className="timing text-label font-bold text-carbon-100">{d.code}</span>
             <span className="timing text-micro text-carbon-400">
-              P{d.grid} <span className="text-carbon-600">→</span> {d.dnf ? "DNF" : `P${d.finish}`}
+              P{d.grid} <span className="text-carbon-600">→</span> {d.dnf ? (d.positionText === "W" ? "DNS" : d.positionText === "D" ? "DSQ" : "DNF") : `P${d.finish}`}
             </span>
             {/* Lost places grow left from the centre line, gained to the right. */}
             <span className="relative block h-[6px]">
@@ -409,7 +409,9 @@ function KeyMoments({ messages }: { messages: any[] }) {
     }
     if (!redSeen && m.lap > 1 && m.lap <= 12 && /^(STANDING|ROLLING) START\b/.test(text)) return [{ ...m, category: "start" }];
     if (m.category === "sc" || m.category === "vsc") return /DEPLOYED|IN THIS LAP|ENDING|BEHIND (THE )?SAFETY CAR/.test(text) ? [m] : [];
-    if (m.category === "penalty") return /TIME PENALTY|DRIVE THROUGH|STOP.?(AND|\/)?.?GO|GRID PENALTY|DISQUALIF|REPRIMAND/.test(text) ? [m] : [];
+    /* "PENALTY SERVED - 5 SECOND TIME PENALTY…" repeats one already listed. */
+    if (m.category === "penalty")
+      return /TIME PENALTY|DRIVE THROUGH|STOP.?(AND|\/)?.?GO|GRID PENALTY|DISQUALIF|REPRIMAND/.test(text) && !/PENALTY SERVED/.test(text) ? [m] : [];
     return [];
   });
   if (all) {

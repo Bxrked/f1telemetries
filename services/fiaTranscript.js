@@ -199,6 +199,16 @@ const DROPPED_WORDS = new Set(
   "a an as at before but by for from is in into like of off on onto per since than the this that to up via with".split(" ")
 );
 
+/* Races the FIA titles differently from Jolpica. Our slug → the FIA's
+   name for it (its title minus "Grand Prix"). `node diag-interviews.mjs`
+   lists the transcripts the FIA's index holds, which is how these were
+   found; a new one is also picked up from that index on the day (see
+   fiaIndexTranscriptUrl). */
+const FIA_NAMES = {
+  brazilian: "sao-paulo", // 2026: Jolpica "Brazilian Grand Prix", FIA "São Paulo Grand Prix"
+  barcelona: "barcelona-catalunya", // 2026: Jolpica "Barcelona Grand Prix", FIA "Barcelona-Catalunya Grand Prix"
+};
+
 /**
  * The addresses a race's transcript can be at, most likely first.
  *   "azerbaijan"                     → f1-2026-azerbaijan-grand-prix-post-race-…
@@ -209,10 +219,37 @@ const DROPPED_WORDS = new Set(
  * address that doesn't exist. Ordinary names give one address, as before.
  */
 export function fiaTranscriptUrls(year, slug) {
-  const stem = /(^|-)grand-prix(-|$)/.test(slug) ? slug : `${slug}-grand-prix`;
+  const name = Object.hasOwn(FIA_NAMES, slug) ? FIA_NAMES[slug] : slug;
+  const stem = /(^|-)grand-prix(-|$)/.test(name) ? name : `${name}-grand-prix`;
   const short = stem.split("-").filter((w) => !DROPPED_WORDS.has(w)).join("-");
   return [...new Set([short, stem])].map((s) => `${FIA_NEWS}/f1-${year}-${s}-${TRANSCRIPT_TAIL}`);
 }
 
 /** The address to link to when there is no transcript to show. */
 export const fiaTranscriptUrl = (year, slug) => fiaTranscriptUrls(year, slug)[0];
+
+const INDEX_LINK = /href="(\/news\/f1-(\d{4})-[a-z0-9-]{1,120}-post-race-press-conference-transcript)"/;
+const INDEX_DATE = /class="date-display-single">\s*(\d{2})\.(\d{2})\.(\d{2})\s*</;
+
+/**
+ * fia.com answers an address it doesn't have with its news index: newest
+ * first, ten items a page (about a day and a half of news), each with a
+ * dd.mm.yy date. When the guessed address misses, the race's transcript
+ * may still be on it under a name we didn't expect. Returns the address
+ * of a post-race transcript of `year` posted on the race day or the two
+ * days after (`raceDate` = Jolpica's yyyy-mm-dd) — races are a week or
+ * more apart, so that can only be this race's — else null. Only ever an
+ * fia.com/news/f1-…-post-race-press-conference-transcript address.
+ */
+export function fiaIndexTranscriptUrl(html, year, raceDate) {
+  const day = Date.parse(`${raceDate}T00:00:00Z`);
+  if (!html || !Number.isFinite(day)) return null;
+  for (const item of html.split('class="list-item"').slice(1)) {
+    const link = item.match(INDEX_LINK);
+    const posted = item.match(INDEX_DATE);
+    if (!link || !posted || link[2] !== String(year)) continue;
+    const after = (Date.UTC(2000 + +posted[3], +posted[2] - 1, +posted[1]) - day) / 86_400_000;
+    if (after >= 0 && after <= 2) return `https://www.fia.com${link[1]}`;
+  }
+  return null;
+}
